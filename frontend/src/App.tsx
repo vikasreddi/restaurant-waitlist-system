@@ -63,6 +63,18 @@ interface StaffQueueResponse {
   ready: StaffQueueReadyEntry[]
 }
 
+interface StaffTableEntry {
+  table_id: number
+  capacity: number
+  status: 'free' | 'held' | 'occupied'
+  current_queue_entry_id?: number
+  seating_assignment_id?: number
+}
+
+interface StaffTablesResponse {
+  tables: StaffTableEntry[]
+}
+
 interface ApiErrorBody {
   error?: { type: string; message: string }
 }
@@ -443,6 +455,88 @@ function StaffQueue({ token, onUnauthorized }: { token: string; onUnauthorized: 
   )
 }
 
+type TableScreen =
+  | { phase: 'loading' }
+  | { phase: 'loaded'; data: StaffTablesResponse }
+  | { phase: 'error'; message: string }
+
+// P0 REQ-STAFF-003 — a read-only view of GET /staff/tables, shown after
+// Staff Login alongside Staff Queue. Same fetch-on-mount + manual "Refresh"
+// pattern as StaffQueue (no live updates, P1); a 401 here is the real
+// backend validation of a restored Staff session, same as StaffQueue's own.
+function StaffTables({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
+  const [screen, setScreen] = useState<TableScreen>({ phase: 'loading' })
+
+  const load = useCallback(async () => {
+    setScreen({ phase: 'loading' })
+    try {
+      const response = await fetch(`${BACKEND_URL}/staff/tables`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      if (response.status === 401) {
+        onUnauthorized()
+        return
+      }
+
+      const body = await parseJson(response)
+
+      if (!response.ok) {
+        const message = (body as ApiErrorBody | null)?.error?.message
+        setScreen({ phase: 'error', message: message ?? `Could not load tables (HTTP ${response.status}).` })
+        return
+      }
+
+      setScreen({ phase: 'loaded', data: body as StaffTablesResponse })
+    } catch {
+      setScreen({ phase: 'error', message: 'Could not reach the server. Check your connection and try again.' })
+    }
+  }, [token, onUnauthorized])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  if (screen.phase === 'loading') {
+    return <p>Loading tables…</p>
+  }
+
+  if (screen.phase === 'error') {
+    return (
+      <>
+        <p role="alert" style={{ color: '#b00020' }}>
+          {screen.message}
+        </p>
+        <button type="button" onClick={load}>
+          Retry
+        </button>
+      </>
+    )
+  }
+
+  const { tables } = screen.data
+
+  return (
+    <div>
+      <button type="button" onClick={load} style={{ marginBottom: '1rem' }}>
+        Refresh
+      </button>
+
+      {tables.length === 0 ? (
+        <p>No tables found.</p>
+      ) : (
+        <ul>
+          {tables.map((table) => (
+            <li key={table.table_id}>
+              Table {table.table_id} — {table.capacity} seats — {table.status.toUpperCase()}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // P0 login stub only (REQ-STAFF-001) — no staff dashboard exists to unlock,
 // so "authenticated" just confirms the real token was actually issued by the
 // real backend. Never fakes a successful login client-side.
@@ -457,6 +551,7 @@ function StaffLogin() {
     const stored = readStoredStaffSession()
     return stored ? { phase: 'authenticated', email: stored.email, token: stored.token } : { phase: 'form' }
   })
+  const [staffView, setStaffView] = useState<'queue' | 'tables'>('queue')
 
   const isLoading = screen.phase === 'loading'
 
@@ -470,9 +565,9 @@ function StaffLogin() {
     setScreen({ phase: 'form' })
   }
 
-  // Called by StaffQueue when the backend actually rejects the restored
-  // token (401) — distinct from logOut only in who initiated it, but kept
-  // as its own function so the two call sites stay self-documenting.
+  // Called by StaffQueue/StaffTables when the backend actually rejects the
+  // restored token (401) — distinct from logOut only in who initiated it,
+  // but kept as its own function so the call sites stay self-documenting.
   function handleUnauthorized() {
     clearStoredSession()
     setScreen({ phase: 'form' })
@@ -517,8 +612,22 @@ function StaffLogin() {
         <button type="button" onClick={logOut}>
           Log Out
         </button>
-        <h2 style={{ marginTop: '1.5rem' }}>Staff Queue</h2>
-        <StaffQueue token={screen.token} onUnauthorized={handleUnauthorized} />
+
+        <nav style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>
+          <button type="button" onClick={() => setStaffView('queue')} disabled={staffView === 'queue'}>
+            Queue
+          </button>{' '}
+          <button type="button" onClick={() => setStaffView('tables')} disabled={staffView === 'tables'}>
+            Tables
+          </button>
+        </nav>
+
+        <h2>{staffView === 'queue' ? 'Staff Queue' : 'Staff Tables'}</h2>
+        {staffView === 'queue' ? (
+          <StaffQueue token={screen.token} onUnauthorized={handleUnauthorized} />
+        ) : (
+          <StaffTables token={screen.token} onUnauthorized={handleUnauthorized} />
+        )}
       </div>
     )
   }

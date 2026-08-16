@@ -98,6 +98,14 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Response 200:** list of tables with `{ table_id, capacity, status, current_queue_entry_id (if held/occupied), seating_assignment_id (if held/occupied) }` — `status` (`free`/`held`/`occupied`) is derived at read time (`03-architecture/domain-model.md` §2), not a stored table field. `held` means claimed by a `pending` assignment (a `ready` group awaiting confirmation); `occupied` means claimed by an `active` one (`seated`). `seating_assignment_id` replaces the old `combination_id` and applies uniformly whether the assignment covers one table or two.
 
+**Response shape (Phase 5B.10):** `{ tables: [...] }` — the direct envelope, parallel to `GET /staff/queue`'s `{ waiting, ready }` choice; not otherwise specified elsewhere in this document. Ordered by `table_id` ascending. `current_queue_entry_id`/`seating_assignment_id` are omitted (not `null`) on a `free` table, matching this project's existing per-status conditional-field convention (e.g. `GET /guest/queue-entries/current`).
+
+**Implementation status (Phase 5B.10, `Staff::TableViewService` / `Staff::TableController`):**
+- Implemented now: every seeded/created `Table` returned, state derived by joining each table's current (`released_at IS NULL`) `SeatingAssignmentTable` claim to its parent `SeatingAssignment.status` — no `tables.status` column exists or was added. A table with only historical (released) claim rows is correctly `free`; released rows are never deleted, only excluded by the same filter every other read in this codebase already uses.
+- Per `functional-spec.md` §5 ("Staff view queue / tables... also a DEC-015 lazy-expiration checkpoint, same as §2"), this read applies the same shared `Allocation::LazyExpiration` module used by `GET /guest/queue-entries/current`, `POST /staff/seat`, and `GET /staff/queue` (now four call sites) before deriving state — an overdue `held` table is correctly reported `free`, its entry expired to `no_show`. As with `GET /staff/queue`, this read never triggers `Allocation::Orchestrator`, even on an expiration it causes.
+- A combined (two-table) `SeatingAssignment` is represented consistently on both member tables — same `seating_assignment_id`, same `current_queue_entry_id`, same derived status on each.
+- Never creates/modifies a `QueueEntry`, `SeatingAssignment`, or `SeatingAssignmentTable` row (beyond the DEC-015 expiration side effect above), never allocates, never releases.
+
 ### `POST /staff/seat` — Seat by code (confirmation, not allocation)
 
 **Behavior note:** by the time this endpoint is called, the table decision has already been made — the allocation service reserved a configuration and generated the code at `waiting → ready` time (`functional-spec.md` §6). This endpoint only validates and confirms an existing reservation; it never runs the allocation algorithm itself.
