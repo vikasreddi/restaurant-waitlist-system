@@ -2,7 +2,7 @@
 
 Lightweight, living map: **Requirement → Specification → Implementation → Test.** Updated as implementation proceeds (per session, per task) — not a one-time artifact. Kept intentionally simple: a Markdown table, not a tracking system. Use the `requirement-traceability` skill when updating this file.
 
-Status: **Phase 5A = infrastructure/bootstrap only** (Rails/React/PostgreSQL/Docker Compose runnable foundation, no business logic). **Phase 5B.2 = persistence foundation** (models, migrations, constraints, seed data — no business APIs; not yet reflected row-by-row below). **Phase 5B.3 = first real business API**: guest join + idempotency (REQ-GUEST-001, REQ-GUEST-007 below). **Phase 5B.4 = guest current-visit/status + informational position** (REQ-GUEST-002, REQ-GUEST-004 below — the *full* DEC-005 position computation remains deferred to Phase 5B.5, the allocation service). All other business requirements remain `—` until their own phase implements them. This file should be updated in the same commit/checkpoint as the code and tests it describes, not after the fact from memory.
+Status: **Phase 5A = infrastructure/bootstrap only** (Rails/React/PostgreSQL/Docker Compose runnable foundation, no business logic). **Phase 5B.2 = persistence foundation** (models, migrations, constraints, seed data — no business APIs; not yet reflected row-by-row below). **Phase 5B.3 = first real business API**: guest join + idempotency (REQ-GUEST-001, REQ-GUEST-007 below). **Phase 5B.4 = guest current-visit/status + informational position** (REQ-GUEST-002, REQ-GUEST-004 below — the *full* DEC-005 position computation remains deferred to the allocation service). **Phase 5B.5.1 = allocation algorithm locked (specification/analysis only, `05-specifications/allocation-algorithm.md`) — no allocation code exists yet; implementation is Phase 5B.5.2.** All other business requirements remain `—` until their own phase implements them. This file should be updated in the same commit/checkpoint as the code and tests it describes, not after the fact from memory.
 
 ## How to use this file
 
@@ -32,13 +32,13 @@ Status: **Phase 5A = infrastructure/bootstrap only** (Rails/React/PostgreSQL/Doc
 | REQ-STAFF-008 (single staff UI, safe backend writes) | `architecture.md` §3 | — | TEST-001, TEST-004 |
 | REQ-TABLE-001 (seed data) | DEC-001, `data-model.md` | — | TEST-016 |
 | REQ-TABLE-002/003 (exclusivity) | `domain-model.md` INV-001–003 | — | TEST-004, TEST-007 |
-| REQ-TABLE-004 (smaller group, larger table) | `allocation-spec.md` §1 | — | TEST-023 |
+| REQ-TABLE-004 (smaller group, larger table) | `allocation-spec.md` §1, `allocation-algorithm.md` §6 (`fit_score`) | — (algorithm locked, Phase 5B.5.1; implementation deferred to Phase 5B.5.2) | TEST-023 |
 | REQ-TABLE-005 (max two-table combination) | DEC-002 | — | TEST-006 |
-| REQ-TABLE-006 (atomic combined allocation) | `allocation-spec.md` §5, INV-005 | — | TEST-005, TEST-006 |
+| REQ-TABLE-006 (atomic combined allocation) | `allocation-spec.md` §5, `allocation-algorithm.md` §18, INV-005 | — (algorithm locked, Phase 5B.5.1; implementation deferred to Phase 5B.5.2) | TEST-005, TEST-006 |
 | REQ-TABLE-007/008 (combination lifecycle) | INV-004, INV-006 | — | TEST-022, TEST-008 |
-| REQ-QUEUE-001/002 (not FIFO, position reflects availability) | `seating-allocation-policy.md` | — | TEST-011, TEST-024 |
-| REQ-QUEUE-003 (starvation protection) | `starvation-policy.md` | — | TEST-009, TEST-010 |
-| REQ-QUEUE-004 (dynamic position) | DEC-005 | — | TEST-011 |
+| REQ-QUEUE-001/002 (not FIFO, position reflects availability) | `seating-allocation-policy.md`, `allocation-algorithm.md` (full document) | — (algorithm locked with explicit formulas, Phase 5B.5.1; implementation deferred to Phase 5B.5.2) | TEST-011, TEST-024 |
+| REQ-QUEUE-003 (starvation protection) | `starvation-policy.md`, `allocation-algorithm.md` §9 | — (algorithm locked, Phase 5B.5.1; implementation deferred to Phase 5B.5.2) | TEST-009, TEST-010 |
+| REQ-QUEUE-004 (dynamic position) | DEC-005, `allocation-algorithm.md` §11 (`total_score`) | — (chronological-rank approximation implemented Phase 5B.4; full formula locked Phase 5B.5.1, implementation deferred to Phase 5B.5.2) | TEST-011 |
 | REQ-INFRA-001/002 (persistence, migrations) | `data-model.md` | — | TEST-016 |
 | REQ-INFRA-003 (hard-path tests) | `test-strategy.md` | — | (this table) |
 | REQ-INFRA-004 (runnable, Docker Compose) | `architecture.md` §6 | — | manual — `docker compose up` smoke test |

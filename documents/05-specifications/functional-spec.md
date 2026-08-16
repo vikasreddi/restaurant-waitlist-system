@@ -49,7 +49,7 @@ Status: specification only, not implementation. Consolidates `01-requirements/` 
 
 **Trigger:** any event that changes table availability or the waiting set — join, release, no-show (staff or DEC-015 expiration), leave. Not invoked by staff directly.
 
-**Behavior:** per `allocation-spec.md` / `seating-allocation-policy.md`, the allocation service selects the best-eligible `waiting` entry for each newly-available configuration and, atomically:
+**Behavior:** per `allocation-spec.md` / `seating-allocation-policy.md` / `allocation-algorithm.md` (Phase 5B.5.1 — the locked, formula-precise version of this selection step), the allocation service selects the best-eligible `waiting` entry for each newly-available configuration and, atomically:
 1. Creates a `pending` `SeatingAssignment` and its 1–2 `SeatingAssignmentTable` claim rows.
 2. Generates a `seating_code`.
 3. Transitions the entry `waiting → ready`, sets `ready_at`.

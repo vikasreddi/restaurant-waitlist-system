@@ -106,6 +106,34 @@ The three corrections below are genuine — each is a verifiable defect in the a
 
 ---
 
+### CORR-006 — `allocation-spec.md` still specified a stored, schedule-updated starvation flag, contradicting the already-finalized "derive, don't store" model
+
+**Session:** Session 14 (Phase 5B.5.1, allocation algorithm reconciliation — analysis/specification only, no application code).
+
+**Prompt/context:** This phase's governing prompt explicitly required comparing every proposed algorithm detail against all existing authoritative documents (`seating-allocation-policy.md`, `starvation-policy.md`, `functional-spec.md`, `api-spec.md`, `domain-model.md`, `data-model.md`) and flagging any contradictory rule found in prior AI-generated documentation, rather than silently reconciling or ignoring it.
+
+**AI suggestion (what was already written, from an earlier phase):** `05-specifications/allocation-spec.md` §4, `update_starvation_protection()`, contained:
+```
+function update_starvation_protection():
+    for each waiting group G:
+        if G.starvation_protected_since is null
+           and (now - G.joined_at) >= MAX_WAIT_THRESHOLD:
+            G.starvation_protected_since = now
+```
+— a stored, per-row `starvation_protected_since` field, written by a function described as running "on a schedule or on every relevant read/write."
+
+**Why it was incorrect/incomplete:** This directly contradicts two later, more authoritative, already-finalized documents: `domain-model-proposal.md` §7–8 (Phase 5B.1, finalized Session 9) explicitly reasons through and **rejects** adding a `starvation_protected_since` (or any "weight") column, concluding it's fully derivable from `joined_at` alone and that persisting it would be exactly the kind of unproven precomputed field the project's own instructions warn against; `data-model.md`'s `queue_entries` section explicitly lists "not stored: any position, rank, weight, or starvation-protection flag — all computed at read time" as a finalized constraint. `allocation-spec.md` §4 was written before (or independently of) that reconciliation and was never updated to match — including during the Phase 5B.1.5 specification-consistency pass (Session 10), whose own named audit scope (READY lifecycle, staff seat-by-code, table representation, idempotency, guest identity, table exclusivity, READY expiration) did not include this specific starvation-protection pseudocode, so the contradiction survived undetected until this phase's explicit cross-document comparison requirement surfaced it. A naive implementation of §4 as originally written would have added a schema column and (per its own "on a schedule" phrasing) risked reintroducing exactly the background-scheduler pattern DEC-015 already rejected for the structurally identical READY-expiration case.
+
+**How the human identified the issue:** Not human-caught — self-caught via the deliberate cross-document grep/comparison this phase's own governing prompt required (§23), specifically searching for `starvation_protected_since` across `documents/` and finding it asserted as *rejected* in one finalized document and still *proposed as stored* in another, unrevised one.
+
+**Correction:** `allocation-spec.md` §4 rewritten to `is_starvation_protected(G, now)` — a pure function, no stored field, no schedule, called inline exactly like the DEC-015 lazy READY-expiration check. `allocation-spec.md` §3's reference to `g.is_starvation_protected` (an attribute-access phrasing that read as if it might be a stored/memoized property) was also updated to the explicit function-call form `is_starvation_protected(g, now)` for consistency. The new `allocation-algorithm.md` (this session's primary deliverable) formalizes the same derive-at-read-time behavior as its own §9, and both documents now agree with `domain-model-proposal.md`/`data-model.md`.
+
+**Final decision:** No stored starvation-protection field will exist in the schema; the check is derived from `joined_at` at evaluation time only, in both `allocation-spec.md` and `allocation-algorithm.md`. This is a genuine, real, documentation-only correction — no application code existed for this function, so nothing beyond the specification text needed to change.
+
+**Resulting specification change:** `05-specifications/allocation-spec.md` §4 (rewritten), §3 (one function-call reference updated for consistency), plus a new top-of-document status note pointing to `allocation-algorithm.md` as the locked, formula-precise version of §2–§4. `05-specifications/allocation-algorithm.md` §9 and §23 (new document, this session) states and explains the correction. `domain-model-proposal.md` and `data-model.md` — the two documents that were already correct — were **not** modified (per this phase's own instruction: "current specification → correct it; historical record → preserve it").
+
+---
+
 ## Template for future real examples
 
 ```

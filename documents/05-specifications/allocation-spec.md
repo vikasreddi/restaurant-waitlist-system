@@ -2,6 +2,8 @@
 
 Status: specification only — pseudocode below describes required behavior for the implementation phase; it is not application code and must not be copy-pasted as-is into the codebase without being written idiomatically for Rails/ActiveRecord (DEC-012).
 
+**§2–§4 (compatibility/eligibility/selection/starvation) are made precise — formulas, weights, global candidate scoring, and full tie-breaking — by `allocation-algorithm.md` (Phase 5B.5.1, locked for implementation). Where the two differ, `allocation-algorithm.md` governs.** §0, §1, and §5–§8 (oversized-group rejection, the compatibility/free-table check, the atomic allocation transaction shape, staff confirmation, release, and lazy READY expiration) are unchanged and remain authoritative as written here.
+
 Implements `02-product-decisions/seating-allocation-policy.md` and `starvation-policy.md`.
 
 ## Not naive greedy table iteration
@@ -67,7 +69,7 @@ function select_group_for(configuration):
     if candidates is empty:
         return none   # configuration stays free
 
-    protected = [g in candidates where g.is_starvation_protected
+    protected = [g in candidates where is_starvation_protected(g, now)
                                   and configuration fully satisfies g's requirement]
     if protected is not empty:
         return oldest_by_wait_time(protected)   # Stage 5
@@ -79,17 +81,16 @@ function select_group_for(configuration):
 
 Note: `is_starvation_protected` is only ever evaluated against the **complete** configuration a group needs (INV-013) — a candidate needing a combined pair is never "protected" with respect to a single free table that is only half its requirement. This is enforced by `eligible_groups` already restricting candidates to those the configuration *fully* satisfies.
 
-## 4. Starvation protection trigger
+## 4. Starvation protection check
+
+**Corrected (Phase 5B.5.1 — see `06-ai-working-record/ai-corrections.md` CORR-006).** An earlier version of this function stored a per-row `starvation_protected_since` field, updated "on a schedule." That contradicted `domain-model-proposal.md` §7–8 and `data-model.md`'s explicit "not stored: any position, rank, weight, or starvation-protection flag" — both finalized in Phase 5B.1, before this function was ever reconciled against them. There is no stored flag and no schedule: this is derived at evaluation time, exactly like the DEC-015 lazy READY-expiration check (§6a below).
 
 ```
-function update_starvation_protection():
-    for each waiting group G:
-        if G.starvation_protected_since is null
-           and (now - G.joined_at) >= MAX_WAIT_THRESHOLD:
-            G.starvation_protected_since = now
+function is_starvation_protected(G, now):
+    return (now - G.joined_at) >= MAX_WAIT_THRESHOLD
 ```
 
-Run on a schedule or on every relevant read/write (implementation choice); `MAX_WAIT_THRESHOLD` is configurable (illustrated as 20 minutes, DEC-004). Crossing this threshold grants **priority once the group's complete configuration is available** — it does not itself guarantee an absolute maximum total wait (`starvation-policy.md`).
+Called inline, only when an allocation pass (or, later, any staff/guest read that needs it) actually evaluates a waiting group — never on its own timer. `MAX_WAIT_THRESHOLD` is configurable (illustrated as 20 minutes, DEC-004). Crossing this threshold grants **priority once the group's complete configuration is available** — it does not itself guarantee an absolute maximum total wait (`starvation-policy.md`). See `allocation-algorithm.md` §9 for the full, locked specification of how this interacts with candidate selection (categorical override, not an additive score) and §11/§14 for how multiple simultaneously-protected groups are ordered against each other.
 
 ## 5. Atomic allocation — produces READY, not SEATED
 
