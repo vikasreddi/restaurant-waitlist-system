@@ -763,3 +763,80 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 - Prompt 12 (below) closed the gap Session 9 had explicitly flagged and left open — it authorized a full consistency pass over every implementation-facing specification and diagram that still described the pre-`ready` model, which Session 9's own governing message had scoped away from.
 - Prompt 13 (below) — the candidate's first attempt to paste it was truncated mid-"Migration Safety" section, flagged and not acted on; the complete version arrived as a file, `Phase_5B_2_Prompt.md`, and is recorded verbatim below. This was the first prompt in the entire project to actually authorize writing application code.
 - A structural-reference project (`mentoring-session-booking-main`) was present in the same Downloads folder; per Prompt 2 §14, only its top-level documentation organization (a `docs/` folder with `ARCHITECTURE.md`, `DECISION_LOG.md`, `DIAGRAMS.md`, plus a `.kiro/specs`/`.kiro/steering` spec-driven layout) was glanced at for structural awareness. No content, decisions, or implementation from that project were copied — this project's own documentation structure follows Prompt 2 §11's explicit spec instead. That same reference project's backend (Rails API + PostgreSQL + Docker Compose) also informed the Prompt 3 stack evaluation (`decision-log.md` DEC-012) as evidence of the candidate's working familiarity with the proposed stack.
+- Prompt 14 (below) authorized the first real business API — guest join with idempotency — supplied complete, in one piece, as `Phase_5B_3_Guest_Join_API_Prompt(1).md`, no truncation this time.
+
+---
+
+## Prompt 14 — Phase 5B.3: Guest Join API + Idempotency
+
+**Source:** `Phase_5B_3_Guest_Join_API_Prompt(1).md` (candidate-authored, read from `~/Downloads/`), delivered complete in a single message.
+
+**Session context:** the first prompt in the project authorizing a real, guest-facing business API. Target vertical slice: `POST /guest/queue-entries → QueueEntry → idempotency → anonymous guest token → API response`. Explicitly excludes the allocation engine, queue position, guest leave, all staff APIs, and all infrastructure (Redis/Sidekiq/notifications/live updates/rate limiting/frontend).
+
+**Full text (condensed; all 35 numbered sections' substantive content preserved):**
+
+> **§0/§1 Human-driven development rule:** product decisions are already approved — do not reinterpret them, silently introduce new business rules, or expand this phase into the complete application. A genuine contradiction between approved spec and implementation reality → STOP and report before changing business design. Normal implementation-level decisions that don't change business behavior are allowed.
+>
+> **§2 Read first:** `CLAUDE.md`, all of `documents/01–06`, at minimum `functional-spec.md`, `api-spec.md`, `domain-model-proposal.md`, `domain-model.md`, `data-model.md`, `test-strategy.md`; also inspect the existing Phase 5B.2 implementation (`backend/app/models/`, `db/migrate/`, `db/schema.rb`, `config/routes.rb`, `test/`). Use whichever test framework already exists — do not introduce a new one.
+>
+> **§3 Phase objective — implement ONLY:** guest join endpoint; QueueEntry creation; anonymous guest token generation; idempotent retry handling; request validation; API response; controller/service tests; DB-backed concurrency/idempotency tests where practical; manual curl verification; documentation + AI-working-record updates; git checkpoint.
+>
+> **§4 Endpoint:** conceptually `POST /guest/join`, but follow the existing project's namespacing/versioning convention if one already exists, and do NOT invent a different URL structure if `api-spec.md` already defines one — only fall back to a fresh versioned route (e.g. `POST /api/v1/guest/join`, documented) if the spec doesn't yet define an exact route.
+>
+> **§5 Request:** `{ group_size, phone, idempotency_key }` conceptually — exact parameter names must follow `api-spec.md` if they differ. Required: group size, phone number, idempotency key. Do NOT require login/password/email/guest account/staff credentials.
+>
+> **§6 Validation:** `group_size` must be `> 0`, no invented maximum unless the approved spec already defines one. `phone` must be present; only reasonable validation, no elaborate phone-format system, don't reject legitimate numbers for overly strict formatting. `idempotency_key` must be present; never silently server-generated if the client omitted it.
+>
+> **§7 Anonymous guest identity:** on a genuinely new join, generate an opaque `active_visit_token` — cryptographically strong, unpredictable, non-sequential, not derived from the DB id or phone number. Returned to the guest. Never expose the internal `QueueEntry` id as the guest identity.
+>
+> **§8 New-join behavior:** validate → create `QueueEntry` (`status=waiting`, generate token, store `group_size`/`phone`/`idempotency_key`/`joined_at`) → return response. No table allocated, no `SeatingAssignment`, no seating code. Guest remains `waiting`.
+>
+> **§9 Response:** normally `201 Created`; at minimum `{ active_visit_token, status }` (plus a public identifier only if the approved API design calls for one). Never return table allocation, seating code, staff information, or DB internals.
+>
+> **§10/§11 Idempotent retry (critical):** a retry with the same `idempotency_key` MUST NOT create a second `QueueEntry` — must return the same logical result (same token, same status), never a new token. The DB uniqueness constraint on `idempotency_key` is authoritative; `SELECT → if not found → INSERT` alone is NOT sufficient (concurrent requests can both observe "not found") — must be safe under two genuinely concurrent requests sharing one key, using the DB constraint plus appropriate transaction/error handling.
+>
+> **§12 Concurrent idempotency test required:** two sequential requests do not count as a concurrency test — must demonstrate two truly concurrent requests with the same key produce exactly one `QueueEntry`; if true multithreading is hard in the existing test setup, implement the strongest realistic DB-backed test available and document its limitation explicitly.
+>
+> **§13 Conflicting idempotency retry:** same key, different `group_size`/`phone` on retry — MUST NOT silently mutate the original entry. Use the simplest safe behavior consistent with `api-spec.md` (normally `409 Conflict` with an explanatory error); follow `api-spec.md` if it already defines something else. Add a test.
+>
+> **§14 Same phone number:** do NOT make phone unique — two legitimate guests may share a phone number; these are not automatically the same entry. Idempotency is keyed on `idempotency_key`, never on phone. Add a test if appropriate.
+>
+> **§15 Multiple visits:** a returning guest on a different day (new `idempotency_key`) gets a separate `QueueEntry` and a separate token. Phone number is never a permanent guest identity; no guest account.
+>
+> **§16 Active visit token:** must be persisted on the new entry. A subsequent request using the token is a future-phase recovery mechanism — do NOT implement the full guest position/recovery API in this phase unless `api-spec.md` explicitly requires it for the join response itself.
+>
+> **§17 No allocation:** this phase MUST NOT inspect table availability, choose a table/adjacent tables, create `SeatingAssignment`/`SeatingAssignmentTable`, compute queue position, weighted priority, or starvation, or generate a seating code. After joining: `status == waiting` and `SeatingAssignment` count `== 0` for that entry — add a test proving it.
+>
+> **§18 No FIFO / no position yet:** do NOT implement queue position in this endpoint — seating is not FIFO; the allocation algorithm (compatibility-aware weighted aging + max-wait safeguard) determines eligibility later, not here.
+>
+> **§19 Transaction boundary:** `QueueEntry` creation should be atomic (validate → create → commit); the token must never be returned unless the record actually persisted. No unnecessary transaction complexity — the DB uniqueness constraint is what actually handles concurrent idempotency.
+>
+> **§20 Error responses:** consistent JSON errors for invalid group size (400/422 per existing convention), missing phone, missing idempotency key, conflicting-key retry (409, per the API-approved conflict behavior), and unexpected errors (a safe generic 500 — never SQL, stack traces, DB internals, or secrets).
+>
+> **§21 HTTP/JSON convention:** follow the existing project convention; do not introduce a second response format; if none exists, use a simple consistent structure and document it.
+>
+> **§22/§23 Controller vs. service vs. model:** keep the controller thin (HTTP in, HTTP out, status code only); a join/application service owns request-level idempotency handling, the creation flow, retry-vs-conflict determination, and the transaction boundary; the model owns persistence, validations, associations, DB constraints. No business orchestration in routes; no giant idempotency logic embedded directly in the controller — but don't invent unnecessary service layers if the existing architecture already uses another pattern.
+>
+> **§24 Required tests:** happy path (201, entry created, `waiting`, token returned); group_size 0 and negative rejected; missing phone rejected; same key twice → one entry, same logical response; concurrent same key → exactly one entry; conflicting retry → error + original entry unchanged; same phone + different keys → two legitimate entries; new key → new entry + new token; anonymous token exists/non-empty/not-the-DB-id/never collides between two new entries; no-allocation (`waiting`, zero `SeatingAssignment`, zero `SeatingAssignmentTable`).
+>
+> **§25 API verification:** after tests pass, run the actual app and demonstrate via curl: first join (show the real response), exact retry (verify no second entry, same token/result), conflicting retry (verify the documented conflict behavior). Do not leave demo data in the final seed database — use disposable data, cleaned up afterward.
+>
+> **§26 Clean database verification:** from a fully clean DB (`db:drop db:create db:migrate db:seed` or Docker equivalent), start the backend, call the endpoint, and verify the HTTP response, `QueueEntry` persistence, `waiting` status, token persistence, idempotency-key persistence, and zero `SeatingAssignment`.
+>
+> **§27 Documentation:** update `documents/05-specifications/api-spec.md` only where needed to reflect the actual implemented endpoint — endpoint, request, response, status codes, idempotency behavior, conflicting-idempotency behavior, anonymous-token behavior, explicit non-allocation behavior. Do NOT document future endpoints as implemented.
+>
+> **§28 Requirement traceability:** verify this phase satisfies the relevant guest-join/idempotency requirements; clearly distinguish "implemented now" from "persistence foundation only / later phase"; do not claim guest position/recovery is complete when it isn't.
+>
+> **§29 AI working record:** update `agent-prompts.md`, `session-log.md`, `agent-decisions.md` with this prompt, the implementation session, API decisions, idempotency handling, test results, manual curl verification, and any genuine AI corrections. Do not fabricate mistakes.
+>
+> **§30 If a genuine AI mistake occurs:** stop, identify the affected requirement/spec, explain the error, correct it, add a regression test if appropriate, record it in `ai-corrections.md`. Do not fabricate correction entries.
+>
+> **§31 Security/secrets:** check for passwords, API keys, tokens, `.env` files, machine-specific secrets before committing; no secrets committed; safe demo values only if demo credentials are required.
+>
+> **§32 Git checkpoint:** review `git status`/`git diff`/`git diff --stat` — verify no secrets, no unrelated changes, no future-phase implementation, tests pass — then commit `feat: implement guest join api`; after, run `git status` and `git log --oneline --max-count=3`; working tree should be clean unless there's a clearly documented reason otherwise.
+>
+> **§33 Strict phase boundary — do NOT implement:** guest position (`GET /guest/position`) unless the current approved API contract explicitly requires it for the join flow itself; guest leave (`POST /guest/leave`); allocation (service, compatibility scoring, table/adjacency selection, weighted aging, starvation protection, queue position, `SeatingAssignment` creation); any staff API (login/queue/tables/seating/no-show/release); infrastructure (Redis, Sidekiq, background jobs, notification provider, WebSockets/SSE, rate limiting); any guest or staff frontend UI.
+>
+> **§34 Success criteria:** the 21-item checklist (endpoint implemented; valid request creates a `waiting` `QueueEntry`; token generated, persisted, non-sequential; idempotency key persisted; DB uniqueness protects idempotency; same-key retry doesn't duplicate and returns the same logical result; conflicting same-key request doesn't mutate the original; same phone usable by separate joins; new key can start a new visit; no table/`SeatingAssignment`/seating code created; API tests pass; DB/concurrency tests pass; actual curl verification done; documentation updated; AI working record updated; git checkpoint created; no Phase 5B.4+ functionality implemented).
+>
+> **§35 Final report format:** PASS/BLOCKED status; 1. Endpoint; 2. Request; 3. Success Response; 4. Idempotency (same-key retry, concurrent same-key, conflicting same-key, same-phone-different-keys); 5. Persistence; 6. Tests (Total/Passed/Failed/Skipped + key idempotency/concurrency tests named); 7. Manual API Verification (first join, exact retry, conflicting retry); 8. Database Verification; 9. Documentation; 10. AI Working Record; 11. Git (commit/message/working tree); 12. Scope Verification (explicit confirmation that guest position, guest leave, allocation, weighted aging, starvation, staff APIs, Redis, Sidekiq, notifications, live updates, rate limiting, and frontend business flows were NOT implemented). End exactly with: "Phase 5B.3 is complete. The guest join API, anonymous visit token, idempotency behavior, persistence, tests, and manual API verification are implemented and verified. No Phase 5B.4+ functionality was implemented in this phase." STOP.

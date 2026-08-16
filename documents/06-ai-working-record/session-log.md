@@ -355,3 +355,40 @@ Then resume Prompt 5 from §5 (Backend Bootstrap) onward.
 **Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
 
 **Next session (not yet run):** Phase 5B.3 or equivalent — the allocation service, staff confirmation, and/or the guest/staff APIs, per whatever the candidate authorizes next.
+
+---
+
+## Session 12 — 2026-08-16 — Phase 5B.3: first business API (guest join + idempotency)
+
+**Environment:** Claude Code CLI, same repository, continuing directly from Session 11 in the same conversation. Backend/frontend/postgres containers still running from earlier sessions.
+
+**Phase 5B.3 — Guest Join API + Idempotency.** The candidate's governing prompt (`Phase_5B_3_Guest_Join_API_Prompt(1).md`) was delivered complete in one piece — no truncation this time.
+
+**Implementation (all inside the running `backend` container):**
+- Route: `POST /guest/queue-entries` under `namespace :guest`, matching the route already defined in `api-spec.md` rather than the prompt's own illustrative `POST /guest/join` (§4 explicitly instructs following the existing spec's route over inventing a new one).
+- `Guest::JoinService` (`app/services/guest/join_service.rb`): owns the idempotency decision and the create-vs-replay-vs-conflict logic. A first, non-authoritative `find_by(idempotency_key:)` check short-circuits the ordinary sequential-retry path; the actual concurrency guarantee is the database's own unique index on `idempotency_key`, surfaced via a `rescue ActiveRecord::RecordNotUnique` that resolves exactly like a normal retry would (create / idempotent_replay / conflict, per whether the retried input matches the original).
+- `Guest::QueueEntriesController` (`app/controllers/guest/queue_entries_controller.rb`): thin — translates the service's `Result` into `201` (created), `200` (idempotent replay), `409` (conflict), or `422` (validation_error), with a consistent `{ error: { type, message, details } }` shape for failures.
+- 22 new tests across 3 files: `test/services/guest/join_service_test.rb` (14 unit tests — happy path, validation, retry/replay, conflict, same-phone-different-keys, multiple visits, token properties, no-allocation), `test/services/guest/join_service_concurrency_test.rb` (1 real-thread concurrency test, `use_transactional_tests = false`, `Queue`-based start barrier, per this project's own `hard-path-testing` skill), `test/controllers/guest/queue_entries_controller_test.rb` (8 integration tests over actual HTTP requests/responses).
+
+**A genuine, self-caught concurrency bug — recorded as CORR-005 (`ai-corrections.md`):** the dedicated concurrency test failed on first run (`Expected: [:created, :idempotent_replay], Actual: [:created, :validation_error]`). Diagnosed via a disposable `bin/rails runner` reproduction: `QueueEntry`'s pre-existing `validates :idempotency_key, uniqueness: true` (added in Phase 5B.2, before this service existed) ran its own `SELECT` immediately before the `INSERT`, and under real thread concurrency could itself observe the other thread's just-committed duplicate and raise `ActiveRecord::RecordInvalid` — a different exception from the `ActiveRecord::RecordNotUnique` the service's rescue logic assumed for the race case, non-deterministically depending on timing. Fixed at the root, consistent with CORR-004/INV-016's established philosophy: removed `uniqueness: true` from the model (kept `presence: true`), making the database's unique index the single, self-contained source of truth for this invariant. A stale model test that had asserted the old (buggy) behavior was corrected to assert the new one. Full suite and 5 repeated standalone runs of the concurrency test confirmed the fix, with no regressions (84 runs, 146 assertions, 0 failures throughout).
+
+**Two ambiguity resolutions in favor of the already-approved `api-spec.md` over the prompt's own illustrative wording (recorded in `agent-decisions.md`):** the route (`/guest/queue-entries`, not `/guest/join`) and the request field name (`phone_number`, not `phone`) — both cases where the prompt's §4/§5 explicitly said to prefer the existing spec if one already defines the shape.
+
+**Position deliberately omitted from the response (§18's explicit prohibition on implementing queue position in this phase):** documented as a divergence from `api-spec.md`'s original response shape, not a silent omission — see the "Implementation status (Phase 5B.3)" note added to `api-spec.md`'s join section.
+
+**Verification actually performed, not claimed without running it:**
+- Full suite: 84 runs, 146 assertions, 0 failures, 0 errors, 0 skips — run after the CORR-005 fix, and again after a full clean-database rebuild (`db:drop db:create db:migrate db:seed`, §26).
+- Manual curl verification (§25) against the running backend, using disposable data cleaned up immediately afterward (confirmed `QueueEntry.count == 0` post-cleanup, with the 40 seeded tables and 19 adjacency pairs undisturbed): first join → `201` with `{ entry_id, active_visit_token, status: "waiting" }`; exact retry (same key/data) → `200` with the identical `entry_id`/token; conflicting retry (same key, different `group_size`/`phone_number`) → `409` with the original entry's data unchanged; invalid `group_size` → `422` with a `validation_error` body.
+- One environmental hiccup during manual verification, not a code defect: the long-running dev server (up ~3 hours) hadn't picked up the new `app/services/guest/` directory tree and briefly raised `NameError: uninitialized constant Guest::QueueEntriesController::JoinService` on the first curl call. Confirmed via `bin/rails runner` that `Guest::JoinService` resolved correctly in a fresh process; fixed by restarting the `backend` container, then re-ran all curl scenarios cleanly. Not logged as an AI correction — it's a dev-server-reload artifact of a long implementation session, not a design or code defect.
+
+**Documentation updated:** `api-spec.md` (join endpoint — added the `conflict` error case and an explicit "Implementation status (Phase 5B.3)" note distinguishing what's implemented now from what's deferred: `position` and the DEC-011 oversized-group rejection, both blocked on the not-yet-built allocation service), `01-requirements/traceability.md` (REQ-GUEST-001, REQ-GUEST-007, DEC-011 rows filled in with implementation/test references and explicit "deferred" notes where applicable).
+
+**Security/secrets check (§31):** reviewed the diff — no passwords, API keys, tokens, `.env` files, or machine-specific secrets. No demo credentials introduced (guest join requires no authentication).
+
+**AI working record updated this session:** `agent-prompts.md` (Prompt 14), `session-log.md` (this entry), `agent-decisions.md` (route/field-name resolutions, the position-omission decision, CORR-005 cross-reference).
+
+**Scope boundary honored:** no guest position/leave, no allocation (compatibility scoring, table/adjacency selection, weighted aging, starvation), no staff APIs, no Redis/Sidekiq/notifications/live updates/rate limiting, no frontend business flows. Only `backend/config/routes.rb`, `backend/app/services/guest/`, `backend/app/controllers/guest/`, `backend/app/models/queue_entry.rb` (the CORR-005 fix), `backend/test/{services,controllers}/guest/`, `backend/test/models/queue_entry_test.rb` (the CORR-005 regression-consistent assertion), and the three documentation files above were touched.
+
+**Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
+
+**Next session (not yet run):** Phase 5B.4 or equivalent — likely the allocation service and/or staff confirmation flow, per whatever the candidate authorizes next.

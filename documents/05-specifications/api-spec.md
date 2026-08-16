@@ -20,7 +20,14 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Errors:**
 - `validation_error` — invalid group size / phone number format, **or** group size exceeds every seatable configuration (no single table or adjacent combination can hold it) — rejected outright per DEC-011, with a message directing the group to speak to staff.
+- `conflict` — the same `idempotency_key` was reused for a request with different `group_size`/`phone_number` than the original (not a valid retry — never silently updates the existing entry).
 - `internal_error` — should never surface a partial entry.
+
+**Implementation status (Phase 5B.3, `Guest::JoinService` / `Guest::QueueEntriesController`):**
+- Implemented now: entry creation, `active_visit_token` generation, the full idempotency contract above (201 create / 200 replay / 409 conflict, including under real concurrency — the DB unique index on `idempotency_key` is the sole authority, not a Rails-level validation, per CORR-005), and `group_size > 0` / `phone_number` presence validation.
+- **`position` is deliberately omitted from the 201/200 response body in this phase.** Position is a function of current queue/table state (DEC-005), which doesn't exist yet — no allocation service, no table-compatibility logic, and no `SeatingAssignment` creation exist as of Phase 5B.3 (explicitly out of scope for this phase). Returning a fabricated or hardcoded `position` would be worse than omitting it. It will be added once the allocation/position service (a later phase) exists.
+- **The DEC-011 "group size exceeds every seatable configuration" rejection is also deferred**, for the same reason: evaluating it requires knowing which table configurations exist and are seatable, which is allocation-adjacent logic not yet built. Today, `validation_error` only fires for `group_size <= 0` or a blank `phone_number`.
+- No `SeatingAssignment` or `SeatingAssignmentTable` row is ever created by this endpoint — a join always leaves the entry in `waiting` with zero associated seating assignments.
 
 ### `GET /guest/queue-entries/current` — View position / recover visit
 

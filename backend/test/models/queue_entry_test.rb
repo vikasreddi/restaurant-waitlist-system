@@ -83,9 +83,16 @@ class QueueEntryTest < ActiveSupport::TestCase
     key = SecureRandom.uuid
     QueueEntry.create!(valid_attrs(idempotency_key: key))
 
+    # idempotency_key uniqueness is intentionally NOT a Rails validation (see
+    # CORR-005, and the comment on the model) — a Rails-level uniqueness check
+    # runs a SELECT before the INSERT and can race with the database's own
+    # unique index, non-deterministically raising RecordInvalid instead of
+    # RecordNotUnique under real concurrency. The database's unique index is
+    # the sole source of truth for this invariant, so `valid?` alone does not
+    # catch the duplicate — `save!` does, via RecordNotUnique.
     duplicate = QueueEntry.new(valid_attrs(idempotency_key: key))
-    assert_not duplicate.valid?
-    assert_raises(ActiveRecord::RecordInvalid) { duplicate.save! }
+    assert duplicate.valid?
+    assert_raises(ActiveRecord::RecordNotUnique) { duplicate.save! }
   end
 
   test "idempotency_key uniqueness is enforced at the database level, not just Rails validation" do

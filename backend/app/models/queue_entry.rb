@@ -25,7 +25,19 @@ class QueueEntry < ApplicationRecord
   validates :active_visit_token, presence: true, uniqueness: true
   # idempotency_key is supplied by the client (functional-spec.md §1) — never
   # generated server-side.
-  validates :idempotency_key, presence: true, uniqueness: true
+  #
+  # Deliberately presence-only, NOT `uniqueness: true` — see
+  # 06-ai-working-record/ai-corrections.md CORR-005. A Rails uniqueness
+  # validation runs a SELECT before the INSERT, so under real concurrency it
+  # can win the race against the database's own unique index and raise
+  # ActiveRecord::RecordInvalid instead of ActiveRecord::RecordNotUnique,
+  # depending on timing — two different exception types for the exact same
+  # "this key already exists" case. The database's unique index on
+  # idempotency_key (see the migration) is the single, self-contained source
+  # of truth for this invariant; Guest::JoinService rescues
+  # ActiveRecord::RecordNotUnique directly rather than depending on a
+  # second, racy application-level check.
+  validates :idempotency_key, presence: true
 
   private
 

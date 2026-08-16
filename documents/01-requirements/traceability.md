@@ -2,7 +2,7 @@
 
 Lightweight, living map: **Requirement → Specification → Implementation → Test.** Updated as implementation proceeds (per session, per task) — not a one-time artifact. Kept intentionally simple: a Markdown table, not a tracking system. Use the `requirement-traceability` skill when updating this file.
 
-Status: **Phase 5A = infrastructure/bootstrap only** (Rails/React/PostgreSQL/Docker Compose runnable foundation, no business logic). No business requirement below has been implemented yet — the "Implementation" and "Test" columns remain `—` for every row until Phase 5B (Domain Model + Migrations + Seed Data) begins. This file should be updated in the same commit/checkpoint as the code and tests it describes, not after the fact from memory.
+Status: **Phase 5A = infrastructure/bootstrap only** (Rails/React/PostgreSQL/Docker Compose runnable foundation, no business logic). **Phase 5B.2 = persistence foundation** (models, migrations, constraints, seed data — no business APIs; not yet reflected row-by-row below). **Phase 5B.3 = first real business API**: guest join + idempotency (REQ-GUEST-001, REQ-GUEST-007 below). All other business requirements remain `—` until their own phase implements them. This file should be updated in the same commit/checkpoint as the code and tests it describes, not after the fact from memory.
 
 ## How to use this file
 
@@ -15,13 +15,13 @@ Status: **Phase 5A = infrastructure/bootstrap only** (Rails/React/PostgreSQL/Doc
 
 | Requirement | Specification | Implementation | Test |
 |---|---|---|---|
-| REQ-GUEST-001 (join) | `05-specifications/functional-spec.md` §1, `api-spec.md` join | — | — |
-| REQ-GUEST-002 (view position) | `functional-spec.md` §9, `api-spec.md` current | — | — |
+| REQ-GUEST-001 (join) | `05-specifications/functional-spec.md` §1, `api-spec.md` join | `backend/app/services/guest/join_service.rb`, `backend/app/controllers/guest/queue_entries_controller.rb` — entry creation, `active_visit_token` only; **`position` not yet returned** (deferred, no allocation service — see `api-spec.md` join "Implementation status") | `backend/test/services/guest/join_service_test.rb`, `backend/test/controllers/guest/queue_entries_controller_test.rb` |
+| REQ-GUEST-002 (view position) | `functional-spec.md` §9, `api-spec.md` current | — (not started — depends on allocation service) | — |
 | REQ-GUEST-003 (leave) | `functional-spec.md` §3 | — | — |
 | REQ-GUEST-004 (recover visit) | `functional-spec.md` §2, DEC-006 | — | TEST-013, TEST-014 |
 | REQ-GUEST-005 (seating code) | `api-spec.md` current | — | — |
 | REQ-GUEST-006 (no cross-visit history) | DEC-006 | — | — |
-| REQ-GUEST-007 (double-join protection) | `functional-spec.md` §1, DEC-007 | — | TEST-002, TEST-003, TEST-021 |
+| REQ-GUEST-007 (double-join protection) | `functional-spec.md` §1, DEC-007 | `backend/app/services/guest/join_service.rb` — idempotency key resolution (create / replay / conflict), backed solely by the DB unique index on `idempotency_key` (CORR-005) | `backend/test/services/guest/join_service_test.rb`, `backend/test/services/guest/join_service_concurrency_test.rb` (real-thread concurrency), `backend/test/controllers/guest/queue_entries_controller_test.rb`; TEST-002, TEST-003, TEST-021 |
 | REQ-STAFF-001 (login) | `functional-spec.md` §4 | — | — |
 | REQ-STAFF-002 (view queue) | `functional-spec.md` §5 | — | — |
 | REQ-STAFF-003 (view tables) | `functional-spec.md` §5 | — | — |
@@ -43,7 +43,7 @@ Status: **Phase 5A = infrastructure/bootstrap only** (Rails/React/PostgreSQL/Doc
 | REQ-INFRA-003 (hard-path tests) | `test-strategy.md` | — | (this table) |
 | REQ-INFRA-004 (runnable, Docker Compose) | `architecture.md` §6 | — | manual — `docker compose up` smoke test |
 | REQ-FE-001–006 (frontend) | `functional-requirements.md` | — | TEST-003 (double-join) |
-| DEC-011 (oversized-group rejection) | `functional-spec.md` §1, `allocation-spec.md` §0 | — | TEST-025 |
+| DEC-011 (oversized-group rejection) | `functional-spec.md` §1, `allocation-spec.md` §0 | — (deferred; requires allocation/table-compatibility logic not yet built — see `api-spec.md` join "Implementation status") | TEST-025 |
 
 ## P1 requirements (only tracked once P0 is stable, per `scope-and-tradeoffs.md`)
 
