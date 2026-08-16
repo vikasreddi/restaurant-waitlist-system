@@ -41,6 +41,9 @@ function App() {
   const [groupSize, setGroupSize] = useState(2)
   const [phoneNumber, setPhoneNumber] = useState('')
   const [screen, setScreen] = useState<Screen>({ phase: 'form' })
+  const [activeVisitToken, setActiveVisitToken] = useState<string | null>(null)
+  const [isLeaving, setIsLeaving] = useState(false)
+  const [leaveError, setLeaveError] = useState<string | null>(null)
 
   const isLoading = screen.phase === 'loading'
 
@@ -67,6 +70,7 @@ function App() {
       }
 
       const { active_visit_token } = joinBody as JoinResponse
+      setActiveVisitToken(active_visit_token)
 
       // The join response only ever says "waiting" or "ready" — the actual
       // position/seating_code live on the current-status endpoint, so we
@@ -90,6 +94,38 @@ function App() {
 
   function reset() {
     setScreen({ phase: 'form' })
+    setActiveVisitToken(null)
+    setLeaveError(null)
+  }
+
+  // Uses the real leave endpoint (functional-spec.md §3, api-spec.md) —
+  // never fabricates the resulting status. The response's own `status` is
+  // rendered as-is, so an already-terminal-for-another-reason visit (e.g.
+  // seated) shows its real state rather than being forced to "left".
+  async function handleLeave() {
+    if (!activeVisitToken) return
+    setIsLeaving(true)
+    setLeaveError(null)
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/guest/queue-entries/current/leave`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${activeVisitToken}` },
+      })
+      const body = await parseJson(response)
+
+      if (!response.ok) {
+        const message = (body as ApiErrorBody | null)?.error?.message
+        setLeaveError(message ?? `Could not leave (HTTP ${response.status}).`)
+        return
+      }
+
+      setScreen({ phase: 'result', status: body as CurrentStatusResponse })
+    } catch {
+      setLeaveError('Could not reach the server. Check your connection and try again.')
+    } finally {
+      setIsLeaving(false)
+    }
   }
 
   return (
@@ -154,9 +190,24 @@ function App() {
           {(screen.status.status === 'seated' ||
             screen.status.status === 'left' ||
             screen.status.status === 'no_show') && <p>Status: {screen.status.status.toUpperCase()}</p>}
-          <button type="button" onClick={reset}>
-            Start Over
-          </button>
+
+          {(screen.status.status === 'waiting' || screen.status.status === 'ready') && (
+            <button type="button" onClick={handleLeave} disabled={isLeaving}>
+              {isLeaving ? 'Leaving…' : 'Leave Queue'}
+            </button>
+          )}
+
+          {leaveError && (
+            <p role="alert" style={{ color: '#b00020' }}>
+              {leaveError}
+            </p>
+          )}
+
+          <div style={{ marginTop: '0.5rem' }}>
+            <button type="button" onClick={reset}>
+              Start Over
+            </button>
+          </div>
         </div>
       )}
     </main>

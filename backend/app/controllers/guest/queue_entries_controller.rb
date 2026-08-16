@@ -46,6 +46,22 @@ module Guest
       render json: current_status_json(result), status: :ok
     end
 
+    # POST /guest/queue-entries/current/leave (functional-spec.md §3,
+    # api-spec.md). Same token-only identification rule as #current. Always
+    # 200 on a resolvable token — leaving is idempotent/safe-no-op by design,
+    # never an error for an already-terminal entry (LeaveService itself
+    # decides whether anything actually changes).
+    def leave
+      result = LeaveService.call(active_visit_token: bearer_token)
+
+      if result.outcome == :not_found
+        render json: error_json("not_found", "No active visit found for this token."), status: :not_found
+        return
+      end
+
+      render json: { status: result.queue_entry.status }, status: :ok
+    end
+
     private
 
     def join_params

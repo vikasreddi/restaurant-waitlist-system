@@ -52,9 +52,14 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 ### `POST /guest/queue-entries/current/leave` — Leave
 
-**Auth:** active-visit token, entry must be non-terminal.
+**Auth:** active-visit token, `Authorization: Bearer <active_visit_token>`, entry must be non-terminal.
 
-**Response 200:** `{ status: "left" }`. Idempotent — repeat calls return the same terminal state without error.
+**Response 200:** `{ status: "left" }`. Idempotent — repeat calls return the same terminal state without error. Per `functional-spec.md` §3, "idempotent" is deliberately broader than "already left": leaving an entry that reached *any* terminal state (`left`, `seated`, or `no_show`) through any path is a safe no-op — the response reflects that entry's real current status, never force-reporting `"left"` for a guest who was, say, actually already seated.
+
+**Implementation status (Phase 5B.7 — P0 completion mode, `Guest::LeaveService` / `Guest::QueueEntriesController#leave`):**
+- Implemented now: token-based lookup (same rule as `current` — never phone/id/idempotency-key), `waiting → left` and `ready → left`, atomic release of the entry's `pending` `SeatingAssignment` (and its `SeatingAssignmentTable` row(s), `released_at` set, never deleted) when leaving from `ready`, and `Allocation::Orchestrator` invoked immediately afterward — but **only when a table was actually released** (a `waiting` leave never touches a table, so triggering allocation for it would be a guaranteed no-op; mirrors the existing conditional lazy no-show trigger, Phase 5B.5.4, rather than calling the orchestrator unconditionally).
+- Verified end-to-end: a real waiting guest and a real ready guest (with a real reserved table) both leaving via the actual HTTP endpoint against the real database; a second, previously-waiting guest correctly allocated the table the first guest's leave released.
+- No DEC-015 lazy-expiration re-check is performed inside this endpoint (unlike `current` and `POST /staff/seat`) — `functional-spec.md` §3 does not name leave as one of DEC-015's checkpoints, unlike §2/§6a's explicit mentions; a guest leaving a `ready` reservation that happens to already be past its deadline is simply recorded as guest-initiated `left` (the table is released correctly either way, only the specific terminal status/timestamp differs from what a lazy-expiration check would have produced).
 
 ## Staff endpoints
 

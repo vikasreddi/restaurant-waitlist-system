@@ -14,6 +14,7 @@ Rails.application.routes.draw do
     resources :queue_entries, only: [:create], path: "queue-entries" do
       collection do
         get :current
+        post "current/leave", to: "queue_entries#leave"
       end
     end
   end
