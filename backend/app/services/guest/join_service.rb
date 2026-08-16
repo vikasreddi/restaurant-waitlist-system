@@ -4,9 +4,16 @@ module Guest
   # its Result into an HTTP response; QueueEntry only knows how to persist
   # and validate itself.
   #
-  # Explicitly NOT this service's job (later phases): choosing a table,
-  # creating a SeatingAssignment, computing queue position. A successful join
-  # here always leaves the entry in `waiting` with zero SeatingAssignments.
+  # As of Phase 5B.5.4, a genuinely NEW join (never a replay/conflict/
+  # validation-error outcome) triggers Allocation::Orchestrator after the
+  # entry's creation has committed (this phase's governing prompt §10/§12):
+  # if a compatible table configuration is already available, the entry may
+  # synchronously become `ready` before this service returns. If none is
+  # available, the entry simply stays `waiting` — the orchestrator's
+  # `:no_candidate` result is a normal outcome, not an error. Still
+  # explicitly NOT this service's job: choosing which table/configuration
+  # wins, or any part of the scoring/reservation logic itself — that's
+  # entirely Allocation::DecisionEngine/ReservationService, called as-is.
   class JoinService
     Result = Struct.new(:outcome, :queue_entry, :errors, keyword_init: true)
 
@@ -40,7 +47,14 @@ module Guest
         phone_number: @phone_number,
         idempotency_key: @idempotency_key
       )
-      Result.new(outcome: :created, queue_entry: entry)
+      # Entry creation is already committed at this point (a single create!
+      # is its own implicit transaction) — the orchestrator runs strictly
+      # after, in its own separate transaction(s) per ReservationService
+      # call, never nested inside this one (§11). Runs only for a genuinely
+      # NEW entry — never on an idempotent replay/conflict, which return
+      # from #call before ever reaching this method (§12).
+      Allocation::Orchestrator.call(now: Time.current)
+      Result.new(outcome: :created, queue_entry: entry.reload)
     rescue ActiveRecord::RecordInvalid => e
       # Genuine bad input only (e.g. group_size <= 0, blank phone_number).
       # idempotency_key uniqueness is deliberately NOT a Rails validation

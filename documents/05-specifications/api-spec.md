@@ -14,9 +14,9 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Request:** `{ group_size, phone_number, idempotency_key }`. `idempotency_key` is a client-generated UUID; the client reuses the same value verbatim when retrying a failed/uncertain attempt, and generates a new one for a genuinely new join (`04-diagrams/06-guest-join-idempotency.md`).
 
-**Response 201 (new entry):** `{ entry_id, active_visit_token, position, status: "waiting" }`
+**Response 201 (new entry):** `{ entry_id, active_visit_token, position, status }` — `status` reflects the entry's actual live state at the moment the response is built, not a fixed `"waiting"`: as of Phase 5B.5.4, a new join can synchronously trigger allocation (see "Implementation status" below), so `status` may be `"ready"` in the same response if a compatible table configuration was already available. The response shape itself is unchanged — no `seating_code` or table information is added to this endpoint even when `status` is `"ready"`; a guest whose join synchronously became `ready` gets their `seating_code` the same way any other `ready` guest does, via `GET /guest/queue-entries/current`.
 
-**Response 200 (idempotent replay):** same shape, referencing the pre-existing entry — not a new one (REQ-GUEST-007).
+**Response 200 (idempotent replay):** same shape, referencing the pre-existing entry — not a new one (REQ-GUEST-007). Reflects whatever the entry's current status already is; a replay never re-triggers allocation (see "Implementation status" below).
 
 **Errors:**
 - `validation_error` — invalid group size / phone number format, **or** group size exceeds every seatable configuration (no single table or adjacent combination can hold it) — rejected outright per DEC-011, with a message directing the group to speak to staff.
@@ -28,6 +28,8 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 - **`position` is deliberately omitted from the 201/200 response body in this phase.** Position is a function of current queue/table state (DEC-005), which doesn't exist yet — no allocation service, no table-compatibility logic, and no `SeatingAssignment` creation exist as of Phase 5B.3 (explicitly out of scope for this phase). Returning a fabricated or hardcoded `position` would be worse than omitting it. It will be added once the allocation/position service (a later phase) exists.
 - **The DEC-011 "group size exceeds every seatable configuration" rejection is also deferred**, for the same reason: evaluating it requires knowing which table configurations exist and are seatable, which is allocation-adjacent logic not yet built. Today, `validation_error` only fires for `group_size <= 0` or a blank `phone_number`.
 - No `SeatingAssignment` or `SeatingAssignmentTable` row is ever created by this endpoint — a join always leaves the entry in `waiting` with zero associated seating assignments.
+
+**Implementation status (Phase 5B.5.4, `Allocation::Orchestrator` integration):** a genuinely NEW join (never an idempotent replay or conflict) now triggers `Allocation::Orchestrator` immediately after the entry's creation commits — if a compatible table configuration is currently available, the entry may synchronously become `ready` (a `pending` `SeatingAssignment` created, `seating_code` generated) before this endpoint returns; `Allocation::Orchestrator` returning `:no_candidate` (nothing available) is the normal, non-error case, and the entry simply stays `waiting`. An idempotent replay never re-triggers the orchestrator — the response reflects whatever the entry's current status already is, never a second allocation attempt.
 
 ### `GET /guest/queue-entries/current` — View position / recover visit
 
@@ -45,6 +47,7 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Implementation status (Phase 5B.4, `Guest::CurrentQueueStatusService` / `Guest::QueueEntriesController#current`):**
 - Implemented now: token-based lookup (indexed on `active_visit_token`, never phone/id/idempotency-key), all four response shapes above, the DEC-015 lazy-expiration checkpoint (an overdue `ready` entry is expired to `no_show` and its table(s) released, in the same transaction, before the response is built — via `SELECT ... FOR UPDATE` on the entry row, matching `domain-model-proposal.md` §11's existing concurrency plan; no background job), and the chronological-rank `position` described above.
+- **Phase 5B.5.4:** when the lazy-expiration checkpoint actually fires, `Allocation::Orchestrator` runs immediately afterward (in its own separate transaction, once the expiration's release has committed) to fill the newly-freed table(s) for whichever waiting group is next — this endpoint's own response is unaffected (it always reflects the requesting guest's own now-`no_show` state), but another guest's `waiting` entry may synchronously become `ready` as a side effect of this read. On an ordinary read that doesn't trigger expiration, no allocation runs.
 - Deferred to Phase 5B.5: the full DEC-005 position computation (table availability/compatibility/aging/starvation-aware rank).
 
 ### `POST /guest/queue-entries/current/leave` — Leave
