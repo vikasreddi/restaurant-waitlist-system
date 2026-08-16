@@ -2,6 +2,26 @@ import { useCallback, useEffect, useState } from 'react'
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:3000'
 
+// P0 frontend session persistence (REQ-GUEST-004) — separate storage keys per
+// api-spec.md's own "guest/staff authentication kept structurally separate"
+// principle (Phase 5B.7), so neither token can ever be read/sent as the
+// other's by accident. `staff_session_email` is a display-only convenience
+// (not a credential) so "Logged in as <email>" survives a refresh without a
+// whoami endpoint, which this task's own scope forbids adding.
+const GUEST_TOKEN_STORAGE_KEY = 'guest_active_visit_token'
+const STAFF_TOKEN_STORAGE_KEY = 'staff_session_token'
+const STAFF_EMAIL_STORAGE_KEY = 'staff_session_email'
+
+function readStoredGuestToken(): string | null {
+  return localStorage.getItem(GUEST_TOKEN_STORAGE_KEY)
+}
+
+function readStoredStaffSession(): { token: string; email: string } | null {
+  const token = localStorage.getItem(STAFF_TOKEN_STORAGE_KEY)
+  if (!token) return null
+  return { token, email: localStorage.getItem(STAFF_EMAIL_STORAGE_KEY) ?? '' }
+}
+
 // Matches documents/05-specifications/api-spec.md exactly. Neither `position`
 // nor `seating_code` is ever returned by the join response itself (DEC-005 /
 // Phase 5B.3) — they only exist on GET /guest/queue-entries/current, so a
@@ -48,10 +68,12 @@ interface ApiErrorBody {
 }
 
 type GuestScreen =
+  | { phase: 'recovering' }
   | { phase: 'form' }
   | { phase: 'loading' }
   | { phase: 'result'; status: CurrentStatusResponse }
   | { phase: 'error'; message: string }
+  | { phase: 'recovery-error'; message: string }
 
 async function parseJson(response: Response): Promise<unknown> {
   try {
@@ -64,12 +86,59 @@ async function parseJson(response: Response): Promise<unknown> {
 function GuestJoin() {
   const [groupSize, setGroupSize] = useState(2)
   const [phoneNumber, setPhoneNumber] = useState('')
-  const [screen, setScreen] = useState<GuestScreen>({ phase: 'form' })
-  const [activeVisitToken, setActiveVisitToken] = useState<string | null>(null)
+  const [activeVisitToken, setActiveVisitToken] = useState<string | null>(() => readStoredGuestToken())
+  const [screen, setScreen] = useState<GuestScreen>(() =>
+    readStoredGuestToken() ? { phase: 'recovering' } : { phase: 'form' }
+  )
   const [isLeaving, setIsLeaving] = useState(false)
   const [leaveError, setLeaveError] = useState<string | null>(null)
 
   const isLoading = screen.phase === 'loading'
+
+  // REQ-GUEST-004 — recover a stored active visit from the real backend, not
+  // fabricated locally. A 404 (token unknown/expired) clears the stored
+  // token and falls back to the Join screen; any other failure (network,
+  // 5xx) keeps the token and offers a retry — a temporary outage is not
+  // proof the visit is gone.
+  const recoverVisit = useCallback(async (token: string) => {
+    setScreen({ phase: 'recovering' })
+    try {
+      const response = await fetch(`${BACKEND_URL}/guest/queue-entries/current`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const body = await parseJson(response)
+
+      if (response.status === 404) {
+        localStorage.removeItem(GUEST_TOKEN_STORAGE_KEY)
+        setActiveVisitToken(null)
+        setScreen({ phase: 'form' })
+        return
+      }
+
+      if (!response.ok) {
+        const message = (body as ApiErrorBody | null)?.error?.message
+        setScreen({
+          phase: 'recovery-error',
+          message: message ?? `Could not recover your visit (HTTP ${response.status}).`,
+        })
+        return
+      }
+
+      setScreen({ phase: 'result', status: body as CurrentStatusResponse })
+    } catch {
+      setScreen({
+        phase: 'recovery-error',
+        message: 'Could not reach the server. Check your connection and try again.',
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    const stored = readStoredGuestToken()
+    if (stored) {
+      recoverVisit(stored)
+    }
+  }, [recoverVisit])
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -95,6 +164,7 @@ function GuestJoin() {
 
       const { active_visit_token } = joinBody as JoinResponse
       setActiveVisitToken(active_visit_token)
+      localStorage.setItem(GUEST_TOKEN_STORAGE_KEY, active_visit_token)
 
       // The join response only ever says "waiting" or "ready" — the actual
       // position/seating_code live on the current-status endpoint, so we
@@ -116,6 +186,13 @@ function GuestJoin() {
     }
   }
 
+  // Deliberately does NOT clear the stored token — this button never calls
+  // the real Leave API, so a still-active (waiting/ready) backend visit is
+  // untouched; clearing storage here would silently orphan it on the next
+  // refresh. Storage is only ever cleared by an actual Leave (below) or a
+  // confirmed-invalid (404) token during recovery (functional-spec.md §3/§5
+  // — "follow existing product behavior... do not invent a new guest-session
+  // lifecycle").
   function reset() {
     setScreen({ phase: 'form' })
     setActiveVisitToken(null)
@@ -144,6 +221,7 @@ function GuestJoin() {
         return
       }
 
+      localStorage.removeItem(GUEST_TOKEN_STORAGE_KEY)
       setScreen({ phase: 'result', status: body as CurrentStatusResponse })
     } catch {
       setLeaveError('Could not reach the server. Check your connection and try again.')
@@ -154,7 +232,20 @@ function GuestJoin() {
 
   return (
     <>
-      {screen.phase !== 'result' && (
+      {screen.phase === 'recovering' && <p>Loading your visit…</p>}
+
+      {screen.phase === 'recovery-error' && (
+        <>
+          <p role="alert" style={{ color: '#b00020' }}>
+            {screen.message}
+          </p>
+          <button type="button" onClick={() => activeVisitToken && recoverVisit(activeVisitToken)}>
+            Retry
+          </button>
+        </>
+      )}
+
+      {(screen.phase === 'form' || screen.phase === 'loading' || screen.phase === 'error') && (
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: '1rem' }}>
             <label htmlFor="group-size">Group Size</label>
@@ -252,15 +343,26 @@ type QueueScreen =
 // response). No Staff Table/Release/No-show UI, no live updates (P1) — a
 // manual "Refresh" re-fetch is the only way to see updated state, matching
 // this project's existing "no polling/streaming in P0" boundary.
-function StaffQueue({ token }: { token: string }) {
+function StaffQueue({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
   const [screen, setScreen] = useState<QueueScreen>({ phase: 'loading' })
 
+  // This fetch doubles as the real backend validation of a restored Staff
+  // session (no whoami endpoint exists, and this task's own scope forbids
+  // adding one) — a 401 here means the token is genuinely invalid, not a
+  // temporary hiccup, so it's the one status that triggers onUnauthorized
+  // (clearing the stored session) rather than the generic error/retry state.
   const load = useCallback(async () => {
     setScreen({ phase: 'loading' })
     try {
       const response = await fetch(`${BACKEND_URL}/staff/queue`, {
         headers: { Authorization: `Bearer ${token}` },
       })
+
+      if (response.status === 401) {
+        onUnauthorized()
+        return
+      }
+
       const body = await parseJson(response)
 
       if (!response.ok) {
@@ -273,7 +375,7 @@ function StaffQueue({ token }: { token: string }) {
     } catch {
       setScreen({ phase: 'error', message: 'Could not reach the server. Check your connection and try again.' })
     }
-  }, [token])
+  }, [token, onUnauthorized])
 
   useEffect(() => {
     load()
@@ -347,9 +449,34 @@ function StaffQueue({ token }: { token: string }) {
 function StaffLogin() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [screen, setScreen] = useState<StaffScreen>({ phase: 'form' })
+  // Optimistically restored from storage as "authenticated" — StaffQueue's
+  // own real GET /staff/queue fetch is what actually validates the token
+  // against the backend (see its own comment); this is what avoids a
+  // Login-screen flash on refresh (no whoami round trip needed first).
+  const [screen, setScreen] = useState<StaffScreen>(() => {
+    const stored = readStoredStaffSession()
+    return stored ? { phase: 'authenticated', email: stored.email, token: stored.token } : { phase: 'form' }
+  })
 
   const isLoading = screen.phase === 'loading'
+
+  function clearStoredSession() {
+    localStorage.removeItem(STAFF_TOKEN_STORAGE_KEY)
+    localStorage.removeItem(STAFF_EMAIL_STORAGE_KEY)
+  }
+
+  function logOut() {
+    clearStoredSession()
+    setScreen({ phase: 'form' })
+  }
+
+  // Called by StaffQueue when the backend actually rejects the restored
+  // token (401) — distinct from logOut only in who initiated it, but kept
+  // as its own function so the two call sites stay self-documenting.
+  function handleUnauthorized() {
+    clearStoredSession()
+    setScreen({ phase: 'form' })
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -375,6 +502,8 @@ function StaffLogin() {
         return
       }
 
+      localStorage.setItem(STAFF_TOKEN_STORAGE_KEY, token)
+      localStorage.setItem(STAFF_EMAIL_STORAGE_KEY, email)
       setScreen({ phase: 'authenticated', email, token })
     } catch {
       setScreen({ phase: 'error', message: 'Could not reach the server. Check your connection and try again.' })
@@ -384,12 +513,12 @@ function StaffLogin() {
   if (screen.phase === 'authenticated') {
     return (
       <div>
-        <p>Logged in as {screen.email}.</p>
-        <button type="button" onClick={() => setScreen({ phase: 'form' })}>
+        <p>Logged in{screen.email ? ` as ${screen.email}` : ''}.</p>
+        <button type="button" onClick={logOut}>
           Log Out
         </button>
         <h2 style={{ marginTop: '1.5rem' }}>Staff Queue</h2>
-        <StaffQueue token={screen.token} />
+        <StaffQueue token={screen.token} onUnauthorized={handleUnauthorized} />
       </div>
     )
   }
