@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+
+# Clear a stale server.pid left over from a previous container run.
+if [ -f tmp/pids/server.pid ]; then
+  rm -f tmp/pids/server.pid
+fi
+
+# Make sure the dev database exists and has the (currently empty) schema loaded
+# before booting the server. No business migrations exist yet (Phase 5A bootstrap).
+if [ "$1" = "rails" ] && [ "$2" = "server" ]; then
+  ./bin/rails db:prepare
+fi
+
+exec "$@"

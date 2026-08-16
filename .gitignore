@@ -1,0 +1,19 @@
+# Environment / secrets — dev-only credentials live directly in docker-compose.yml,
+# which IS committed; these are for anything that shouldn't be (real secrets, local overrides).
+.env
+.env.*
+backend/config/master.key
+
+# OS
+.DS_Store
+
+# Dependencies (installed inside containers via named volumes; ignored defensively
+# in case anyone runs npm/bundle locally too)
+node_modules/
+vendor/bundle/
+
+# Generated / logs / runtime
+coverage/
+log/
+tmp/
+frontend/dist/
