@@ -207,3 +207,151 @@ Then resume Prompt 5 from §5 (Backend Bootstrap) onward.
 **End-of-session report to candidate:** documentation files updated and exact stale statements corrected; git status (no prior repository → initialized → commit hash/message); verification results; AI working-record files updated; explicit scope confirmation — delivered in the final chat response of this session.
 
 **Next session (not yet run):** Phase 5B — Domain Model + Migrations + Seed Data. Not started in this session, per the explicit phase boundary.
+
+---
+
+## Session 7 — 2026-08-16 — Phase 5B.1 domain model proposal (specification only, no code)
+
+**Environment:** Claude Code CLI, same local macOS environment and repository (`~/Documents/restaurant-waitlist/`), new conversation, immediately following Session 6.
+
+**Phase 5B.1 — Domain Model Proposal and Review**
+
+- The candidate's first paste of the governing prompt was truncated (cut off mid-§3, no closing sections). The agent checked `~/Downloads/` for a matching file, found none, and asked the candidate to re-send rather than guessing at or inventing the rest of a governing specification document — the candidate re-sent the complete text in the next turn.
+- Re-derived the domain model from requirements rather than accepting the Phase 3 draft (`03-architecture/domain-model.md`, `data-model.md`) as-is, per the governing prompt's explicit instruction not to automatically accept the example state machine or ERD. This surfaced a real, previously-unnoticed gap: Phase 3's `functional-spec.md` had staff "seat by code" perform allocation *synchronously* at the moment of code entry, but the brief's actual guest experience ("when a group reaches the front, their phone shows a code") requires the system to decide and reserve a configuration for a specific group *before* staff ever act. Modeling this correctly required adding a `ready` state to `QueueEntry` that the Phase 3 draft never had — recorded as a formal "changed a previous assumption" note (governing prompt §20) rather than silently introduced.
+- Produced `documents/05-specifications/domain-model-proposal.md` — the full analysis: 6 entities (`StaffUser`, `Table`, `TableAdjacency`, `QueueEntry`, `SeatingAssignment`, `SeatingAssignmentTable`), down from Phase 3's 7 (dropped `IdempotencyRecord` as a separate table — folded into a unique column on `QueueEntry`; dropped `GuestIdentity`/`ActiveVisitToken` as a separate entity — folded into a unique column on `QueueEntry`, matching the governing prompt's own "queue-entry token" option; dropped `NotificationJob` entirely — out of scope per §19). Replaced `TableCombination` with `SeatingAssignment` + a `SeatingAssignmentTable` join table, chosen specifically because a single partial-unique index on the join table's `table_id` column (not two independent indexes on two FK columns) is the only design that correctly enforces "a table is claimed by at most one active assignment regardless of which slot it fills" — full alternatives comparison (§14 of the deliverable) documents why the simpler two-column design was considered and rejected on correctness grounds, not merely a preference.
+- Deliberately did **not** propose any stored "position" or "starvation weight" column — both are derived at read time from `joined_at`/`group_size`/current table state, per the governing prompt's explicit instruction to prove necessity before persisting a precomputed value; documented why (§7–8 of the deliverable).
+- Verified the exact current invariant IDs (`INV-001`–`INV-015`) and decision IDs (`DEC-001`–`DEC-014`) against the live documents before citing them in the proposal, rather than relying on memory.
+- Worked through the full concurrency plan (§11 of the deliverable) mapping each of the governing prompt's five named race scenarios to a specific mechanism (row locking, the join-table partial-unique index, or the idempotency-key unique index) — no implementation was written, only which mechanism protects which case.
+- Proposed a concrete, deterministic 40-table seed/adjacency plan explicitly tied to the allocation algorithm's needs (enough 4+4 adjacent pairs to support groups of 5–8; the two 6-seat tables deliberately left non-adjacent to anything, since no requirement needs a >8-person automatic configuration) — no seed code written.
+- **Governance note recorded in the deliverable itself (§0, §16):** this proposal revises Phase 3's "approved" `domain-model.md`/`data-model.md` in several places. Per `CLAUDE.md`'s "if you find a contradiction... STOP and report it, do not silently resolve it," the agent did not overwrite those documents — the proposal recommends they be formally updated once approved, and flags this as an explicit open item rather than assuming approval.
+- Two new open decisions surfaced (not previously tracked): whether the `ready` state needs its own abandonment timeout distinct from `OPEN-007`'s existing `waiting`-state scope, and the standing `OPEN-005` (seating-code format) remains unresolved by this proposal — it only commits to "a unique string column."
+
+**No AI correction recorded.** No case this session fits `ai-corrections.md`'s pattern (an agent claim a human had to catch as wrong) — the truncated-prompt handling was a stop-and-ask, not a wrong claim, and the Phase 3 assumption revisions are disclosed, reasoned refinements produced *during* the analysis this phase asked for, not a mistake caught after the fact.
+
+**AI working record updated this session:** `agent-prompts.md` (Prompt 9, condensed but complete), `session-log.md` (this entry), `agent-decisions.md` (the domain-model revision judgment calls), plus the new specification artifact `documents/05-specifications/domain-model-proposal.md`.
+
+**Strict no-code rule honored:** no migrations, models, controllers, services, seed code, frontend changes, Docker changes, APIs, or tests were created this session.
+
+**End-of-session report to candidate:** delivered per the governing prompt's §22 Final Output structure in the final chat response of this session, referencing `domain-model-proposal.md` for full depth.
+
+**Next session (not yet run):** Phase 5B.2 — implementation, only after human review/approval of this proposal (and, per the proposal's own recommendation, a decision on whether to formally update `03-architecture/domain-model.md`/`data-model.md` to match it).
+
+---
+
+## Session 8 — 2026-08-16 — human review of the Phase 5B.1 proposal: one real correction, one open item resolved
+
+**Environment:** Claude Code CLI, same repository, continuing directly from Session 7 in the same conversation (candidate reviewed the proposal and responded with findings, not a new governing prompt file).
+
+**Human review findings on `documents/05-specifications/domain-model-proposal.md`:**
+
+1. **A real, confirmed defect:** the proposed `seating_assignment_tables` exclusivity constraint (a partial unique index predicated on a `status` column meant to mirror the parent `SeatingAssignment.status`) can't actually work as described — PostgreSQL partial-index predicates cannot reference another table's column, so the "database-level enforcement" the proposal claimed was really only as strong as an unenforced application promise to keep the denormalized column in sync. Recorded in full as **CORR-004** in `ai-corrections.md` — the fourth genuine, human-caught correction on this project, and structurally the same overclaiming pattern as CORR-001 (a guarantee stated more confidently than the mechanism actually delivers), this time at the schema level. Corrected throughout `domain-model-proposal.md` by removing the denormalized `status` column and switching to row-existence semantics (create on claim, delete on release) with a single plain unique index — simpler than the original design, not just fixed.
+2. **A real, previously-open question, now given a product answer:** the candidate confirmed that a `ready` reservation must not be allowed to hold tables indefinitely, closing (in principle) the open item the proposal itself had flagged (`domain-model-proposal.md` §16 item 2, tied to `OPEN-007`'s scope). The candidate stated an expiration policy is being introduced but did not yet specify its exact shape (duration, and what happens to the entry/table on expiry) — the agent asked clarifying questions rather than inventing the specifics, consistent with "the candidate is driving product decisions" (`CLAUDE.md`).
+
+**AI working record updated this session:** `ai-corrections.md` (CORR-004), `session-log.md` (this entry), `agent-decisions.md` (recording that the expiration-policy specifics were asked for, not assumed). `domain-model-proposal.md` corrected in place (still specification only — no code).
+
+**Next session (not yet run):** once the expiration policy's specifics are confirmed, fold them into `domain-model-proposal.md` (§6/§16) and `02-product-decisions/decision-log.md` (a new `DEC-*` entry), then proceed toward Phase 5B.2 implementation per the candidate's approval.
+
+---
+
+## Session 9 — 2026-08-16 — Phase 5B.1 finalized: expiration policy locked, constraint design corrected a second time, architecture docs updated
+
+**Environment:** Claude Code CLI, same repository, continuing directly from Session 8 in the same conversation.
+
+**Two-part human message:** the candidate's first attempt to answer Session 8's clarifying questions (Prompt 11) was truncated mid-paste. The agent checked `~/Downloads/` for a matching file (none found) and asked for the remainder rather than guessing — the same protocol used for a similarly truncated paste in Session 7. The candidate then sent the complete, locked decision set.
+
+**What was locked in (verbatim trade-off preserved, recorded in `decision-log.md` as **DEC-015**):**
+- READY expiration outcome: auto-`no_show` (not `ready → waiting`) after a 5-minute timeout.
+- Evaluation: lazy, embedded in existing read/write operations (guest position read, staff queue/table view, guest join, allocation/availability calculation, seating operations) — explicitly no Sidekiq, scheduler, or background sweep.
+- Duration: 5 minutes, tunable configuration, not hardcoded into business logic.
+
+**Constraint design corrected a second time** (the Session 8 fix — CORR-004, delete-on-release — was itself superseded here, not silently replaced): the candidate proposed `seating_assignment_tables(..., released_at)` with `UNIQUE(table_id) WHERE released_at IS NULL` and asked the agent to validate it against pending assignments, active assignments, release, expiration, historical assignments, and atomic two-table seating. The agent validated the design against all six cases explicitly (see `domain-model-proposal.md` §2/§4) and adopted it — it's strictly better than the agent's own Session 8 fix, since it additionally preserves historical seating-assignment data that the delete-based version would have discarded. `domain-model-proposal.md` was updated throughout (§0, §2, §3, §4, §5, §6, §11, §13, §15, §16, §17) to reflect the finalized design consistently, not just patched in one place.
+
+**Architecture documents updated directly** (previously only recommended, per Session 7's stance — this session's governing message explicitly authorized it): `03-architecture/domain-model.md` and `data-model.md` were rewritten to match the finalized proposal — new entities (`SeatingAssignment`/`SeatingAssignmentTable` replacing `TableCombination`, dropping `IdempotencyRecord`/`GuestVisit`/`NotificationJob`), the `ready` state and its expiration path, and two new invariants: `INV-016` (a DB exclusivity constraint must never depend on another table's column staying in sync — the concrete lesson of CORR-004) and `INV-017` (READY-reservation lazy expiration, DEC-015). `CLAUDE.md`'s product rules, invariant-range reference, and non-negotiable-invariants summary were updated to match, since it's the file loaded into every future session.
+
+**Known gap, flagged rather than silently left inconsistent:** `05-specifications/functional-spec.md`, `allocation-spec.md`, `api-spec.md`, `test-strategy.md`, and four diagrams (`03-staff-journey.md`, `05-combined-table-atomic-allocation.md`, `06-guest-join-idempotency.md`, `07-architecture-data-flow.md`) still describe the pre-`ready` synchronous-seating model from Phase 3 and have not been updated this session. The governing prompt's instruction was scoped to "architecture/data-model documentation," which was fully addressed; these specification/diagram files are a different category and a larger additional scope the agent did not expand into unilaterally. **This needs a follow-up pass before Phase 5B.2 implementation begins**, since an implementer reading only those files would get outdated guidance that contradicts the now-authoritative `domain-model.md`/`data-model.md`/`domain-model-proposal.md`.
+
+**No fabricated corrections.** CORR-004 (already recorded in Session 8) is the only correction this session builds on; the constraint refinement here is a continuation/supersession of that same correction, not a new independent mistake, and is described that way in `domain-model-proposal.md` rather than logged as a separate CORR entry.
+
+**AI working record updated this session:** `agent-prompts.md` (Prompts 10 and 11, verbatim/condensed), `session-log.md` (this entry), `agent-decisions.md` (the released_at-vs-delete design validation, and the decision to scope the architecture-doc update to exactly what was authorized).
+
+**Strict no-code rule honored:** no Rails models, migrations, controllers, services, APIs, seed code, frontend code, domain tests, Redis, or Sidekiq were created or modified.
+
+**Next session (not yet run):** either a documentation-consistency pass over the flagged specification/diagram files, or Phase 5B.2 implementation directly if the candidate judges the flagged gap low-risk enough to address alongside implementation — candidate's call, not decided here.
+
+---
+
+## Session 10 — 2026-08-16 — Phase 5B.1.5 specification consistency pass
+
+**Environment:** Claude Code CLI, same repository, continuing directly from Session 9 in the same conversation.
+
+**Phase 5B.1.5 — Specification Consistency Pass.** This is exactly the follow-up Session 9's report flagged as needed — the candidate authorized it explicitly rather than it being silently deferred indefinitely.
+
+**Audit performed first, before any edits** (per the governing prompt's explicit ordering): read every document under `01-requirements/` through `06-ai-working-record/` that could plausibly still describe the pre-`ready` model, and produced a contradiction table (Document | Old assumption | Finalized assumption | Action) covering 21 distinct items across 4 specification files, 6 diagrams, 2 requirements documents, and 2 decision documents. That table was presented in full before any document was touched.
+
+**Documents updated:**
+- `05-specifications/functional-spec.md` — idempotency reference fixed; §2 (position/recover) split into `waiting` vs. `ready` response behavior, both now DEC-015 lazy-expiration checkpoints; §5 (staff view) updated for derived table status and `ready` entries; the old §6 "Staff seat by code" split into a new §6 "Allocation (system, not staff)" and §6a "Staff seat by code (confirmation, not allocation)" — the core fix, since the old single section conflated the two; §7 (release) and §8 (no-show) updated for `SeatingAssignment`/`released_at`; new §8a documents DEC-015's automatic no-show path; §9 (position) clarified as `waiting`-only.
+- `05-specifications/allocation-spec.md` — `compatible_configurations` rewritten around derived table freedom (`is_free`, no `Table.status`); §5 "Atomic allocation" corrected to produce `ready` (not `seated`) and create `SeatingAssignment`/`SeatingAssignmentTable` rows instead of a `TableCombination`; new §5a "Staff confirmation" (the actual `ready → seated` step, explicitly noted as never re-running the allocation algorithm); §6 "Release" rewritten around `SeatingAssignment`/`released_at`; new §6a "Lazy READY expiration" implementing DEC-015 as an inline function, not a job; both worked examples (§7, §8) corrected to stop at `ready` and to describe an allocation-vs-allocation race, not a staff-vs-staff one.
+- `05-specifications/api-spec.md` — guest current-position response split into `waiting`/`ready` shapes; `GET /staff/tables` and `GET /staff/queue` updated for derived status and `ready` entries; `POST /staff/seat` rewritten with an explicit "confirmation, not allocation" note and a new `conflict` case distinguishing expiration from a generic race.
+- `05-specifications/test-strategy.md` — TEST-004/005/006 reframed as allocation-vs-allocation races, not staff-vs-staff; TEST-022 terminology fixed; TEST-015 reworded; six new tests added (TEST-027 through TEST-033) covering the `ready` transition, staff confirmation not re-allocating, DEC-015 expiration, a confirmation-after-expiration race, lazy expiration not permanently blocking a table, concurrent expiration discovery, and the exclusivity constraint itself at the database level; the "highest-value tests" summary line updated to include three of the new ones.
+- `04-diagrams/02-guest-journey.md`, `03-staff-journey.md`, `04-seating-allocation.md`, `05-combined-table-atomic-allocation.md`, `06-guest-join-idempotency.md`, `07-architecture-data-flow.md` — all six updated; `07-architecture-data-flow.md` required the most substantive change, splitting one "Seat handler" into a separate allocation service and confirmation handler, and correcting the DB box's table names.
+- `01-requirements/functional-requirements.md` and `acceptance-criteria.md` — REQ-STAFF-004 and REQ-GUEST-005 wording tightened to say `ready`, not `waiting`; a new acceptance criterion added for the expired-code case.
+- `02-product-decisions/seating-allocation-policy.md` and `starvation-policy.md` — one clarifying sentence each, making explicit that these policies produce `ready`, not `seated`.
+- `CLAUDE.md`, `.claude/agents/backend-domain-agent.md`, `.claude/agents/test-engineering-agent.md`, `.claude/skills/hard-path-testing/SKILL.md` — stale `INV-001–INV-015` ranges found and corrected to `INV-001–INV-017` (a residual gap from Session 9's own invariant additions, caught during this session's broader audit); `hard-path-testing/SKILL.md`'s state-transition guidance updated to name the current states.
+
+**Documents intentionally unchanged:** `01-system-context.md` (never named specific entities, nothing to contradict); `documents/07-future-evolution/*` (describe deferred future work, not the current model); all prior `06-ai-working-record/` session entries (historical record of what was true *at the time* — correctly preserved, not rewritten, per the governing prompt's explicit "do not blindly replace historical AI-working-record references"); `05-specifications/domain-model-proposal.md` and `03-architecture/domain-model.md`/`data-model.md` (already finalized in Session 9; this session's audit confirmed no further changes were needed there).
+
+**No requirement conflicts found** requiring a STOP — every named requirement (REQ-GUEST-001 through 005, REQ-STAFF-004/005/006, REQ-TABLE-002/005, REQ-QUEUE-001/002/003, REQ-INFRA-001/002) still maps cleanly to the finalized model; only wording needed tightening, not requirement content.
+
+**Final verification grep pass** confirmed every remaining occurrence of `TableCombination`/`IdempotencyRecord`/`GuestIdentity`/`idempotency_records` in the documentation tree is either (a) inside the AI working record, correctly describing history, or (b) an explicit "revised from Phase 3 draft" note inside an authoritative document, clearly marked as historical context rather than live guidance. No unflagged contradictions remain.
+
+**No AI correction recorded.** This session built directly on CORR-004 (already recorded) and did not surface any new instance of the agent confidently asserting something wrong — it was a systematic propagation of an already-corrected design, not a new mistake.
+
+**AI working record updated this session:** `agent-prompts.md` (Prompt 12, condensed), `session-log.md` (this entry), `agent-decisions.md` (the audit-first ordering decision and the historical-vs-contradiction classification approach).
+
+**Strict no-code rule honored:** no migrations, models, controllers, services, APIs, seeds, frontend code, Redis, or Sidekiq were created or modified — this session touched only `documents/`, `CLAUDE.md`, and `.claude/`.
+
+**Next session (not yet run):** Phase 5B.2 — implementation. The specification set is now internally consistent and, per the candidate's judgment, ready for that to begin.
+
+---
+
+## Session 11 — 2026-08-16 — Phase 5B.2: first application code in the project
+
+**Environment:** Claude Code CLI, same repository, continuing directly from Session 10 in the same conversation. Backend/frontend/postgres containers still running from earlier bootstrap sessions.
+
+**Phase 5B.2 — Domain Persistence Implementation.** The candidate's first paste of the governing prompt was truncated mid-§19; the agent flagged it rather than acting on it, and the candidate supplied the complete file (`Phase_5B_2_Prompt.md`) instead.
+
+**Implementation (all inside the running `backend` container — nothing installed on the host):**
+- Enabled `bcrypt` in the Gemfile (was commented out) for `StaffUser#has_secure_password`.
+- Six migrations, generated via `rails generate migration` then hand-written: `staff_users`, `tables`, `table_adjacencies`, `queue_entries`, `seating_assignments`, `seating_assignment_tables`. All ran clean on the first attempt against both the already-running dev DB and a full `db:drop db:create db:migrate` clean-slate run (§33).
+- Six models (`StaffUser`, `Table`, `TableAdjacency`, `QueueEntry`, `SeatingAssignment`, `SeatingAssignmentTable`) with the associations, validations, and DB-constraint backing specified in the prompt.
+- `db/seeds.rb`: deterministic 40-table seed (20×2/18×4/2×6, `T01`-`T40`) and 19 deterministic adjacency pairs, idempotent via `find_or_create_by!`.
+- 60 tests across 7 files (`table_test.rb`, `table_adjacency_test.rb`, `queue_entry_test.rb`, `seating_assignment_test.rb`, `seating_assignment_table_test.rb`, `staff_user_test.rb`, `seed_data_test.rb`), 93 assertions, covering every case the prompt's §31/§32 named plus several the agent added (e.g., proving each Rails-level validation is backstopped by the actual DB constraint, not just application code — a direct application of the project's own `hard-path-testing` skill).
+
+**Three implementation-level decisions made under the prompt's own §0 delegation ("choose the simplest correct implementation and document it"), all recorded in `agent-decisions.md`:**
+1. Added a stored `expires_at` on `seating_assignments` (set at creation from a new `SeatingAssignment::READY_TIMEOUT` constant, tunable via `READY_TIMEOUT_SECONDS` env var) — a small, acknowledged deviation from `domain-model-proposal.md` §8's "derive, don't store" stance, made because §11 of this prompt explicitly listed `expires_at` as a field and storing it is harmless (a frozen deadline, not a business-rule change).
+2. `TableAdjacency` uses **canonical-pair storage**: a `table_id < adjacent_table_id` database check constraint is what actually prevents a pair from being representable as two independent rows (the prompt's own stated concern in §6) — not application-level deduplication. A `TableAdjacency.pair!(a, b)` class method and a `Table#adjacent_tables` reader hide the canonical-ordering detail behind a symmetric interface. This same check constraint incidentally also rejects self-adjacency (`table_id == adjacent_table_id` can never satisfy `<`), so no separate DB mechanism was needed for that case — a Rails-level validation was still added for a friendlier error message.
+3. `seating_code` stays on `queue_entries` (matching the already-finalized `data-model.md`) rather than being duplicated onto `seating_assignments`, resolving a wording ambiguity in this prompt's §11 (which listed it among "SeatingAssignment's approved conceptual fields") in favor of the more specific, explicitly-named-as-authoritative source (`data-model.md`, listed in this prompt's own §1 as a primary source to read first).
+
+**Verification actually performed, not claimed without running it:**
+- Migrations ran clean twice: once against the existing dev DB, once from a full `db:drop db:create db:migrate` (§33).
+- `db:seed` produced exactly 40 tables (20/18/2 by capacity) and 19 adjacency pairs — verified via `rails runner`, not assumed from reading the seed script.
+- Actual generated PostgreSQL schema inspected directly via `psql \d` (§34) for all four non-trivial tables — confirmed: no occupancy column on `tables`; the canonical-order check constraint on `table_adjacencies`; all check constraints, unique indexes, and partial unique indexes present with the exact predicates specified (`WHERE released_at IS NULL`, `WHERE status <> 'released'`, `WHERE seating_code IS NOT NULL`); no `TableCombination`/`IdempotencyRecord`/`GuestIdentity` tables exist.
+- All four Rails-console verification examples from §35 run against disposable data inside a transaction that was explicitly rolled back (`ActiveRecord::Rollback`) — confirmed zero residue in the seed database afterward via a direct count query, not just by inspecting the script.
+- Full test suite: **60 runs, 93 assertions, 0 failures, 0 errors, 0 skips** (run twice — once before, once after a self-caught test bug, see below — and a final confirmation run after the clean-DB cycle).
+- Pre-existing `test/controllers/health_controller_test.rb` re-run and still passing — confirmed this phase didn't regress Phase 5A's bootstrap.
+
+**A minor, self-caught, self-corrected test-writing bug — not logged as an AI correction, and here's why:** the first `table_test.rb` write had a structural bug (a `Table#update_column` call sitting outside its intended `assert_raises` block), causing that one test to ERROR rather than pass — the underlying database CHECK constraint was correct and working throughout; only the test's own structure was momentarily wrong. Caught immediately by running the suite, fixed in the same turn, re-verified. This doesn't fit `ai-corrections.md`'s pattern (a design/reasoning error a human — or human review — had to catch); it's an ordinary test-writing slip caught by the test suite doing exactly what it's for, in the same session it was written, with no design implication. Consistent with this project's standing rule not to pad that file's signal (see Sessions 6/7/9/10 for the same reasoning applied to other non-qualifying cases).
+
+**Also self-caught during the Rails-console verification (§35), not a code bug:** the first attempt at the verification script wrapped a deliberately-failing raw SQL statement (Example 3) directly inside the outer disposable transaction without a savepoint — PostgreSQL correctly aborted the entire enclosing transaction in response (`PG::InFailedSqlTransaction`), which is expected Postgres behavior, not a schema or application defect. Fixed by wrapping that one check in `ActiveRecord::Base.transaction(requires_new: true)` (a savepoint) so its expected failure doesn't poison the rest of the verification. Re-ran cleanly; confirmed no residue was left by the failed first attempt either (`QueueEntry` count for the disposable phone-number pattern was `0` before any fix was applied, since the entire outer transaction had correctly never committed).
+
+**Documentation updated:** `data-model.md` got a short "Implemented as of Phase 5B.2" addendum recording the three decisions above — `domain-model-proposal.md` and `domain-model.md` were deliberately **not** touched, since the entity/invariant model itself didn't change, only implementation-detail specifics already fully captured in the `data-model.md` addendum (matching this prompt's own §37 instruction not to rewrite product decisions unnecessarily).
+
+**Security/secrets check (§40):** reviewed the full diff — no passwords, API keys, tokens, `.env` files, or machine-specific secrets found. No demo `StaffUser` was seeded (the prompt's §4 only required one "if the existing specification expects one" — it doesn't), so there were no demo credentials to document either.
+
+**AI working record updated this session:** `agent-prompts.md` (Prompt 13, condensed but complete), `session-log.md` (this entry), `agent-decisions.md` (the three implementation decisions above, plus the ambiguity-resolution reasoning for `seating_code`'s location).
+
+**Scope boundary honored:** no guest/staff APIs, no allocation algorithm (compatibility scoring, aging, starvation policy, table matching), no Redis/Sidekiq/background workers/notifications/live updates/rate limiting, no frontend business flows. Only `backend/{Gemfile, Gemfile.lock, db/migrate/, db/schema.rb, db/seeds.rb, app/models/*, test/models/*}` and the three documentation files above were touched.
+
+**Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
+
+**Next session (not yet run):** Phase 5B.3 or equivalent — the allocation service, staff confirmation, and/or the guest/staff APIs, per whatever the candidate authorizes next.

@@ -21,7 +21,7 @@ Each requirement has a stable ID used elsewhere in `documents/` (specs, tests, d
 | REQ-STAFF-001 | Staff log in via email/password (stub auth acceptable) | Explicit | P0 |
 | REQ-STAFF-002 | Staff view the live queue | Explicit | P0 |
 | REQ-STAFF-003 | Staff view the state of every table | Explicit | P0 |
-| REQ-STAFF-004 | Staff seat a waiting group by entering its seating code | Explicit | P0 |
+| REQ-STAFF-004 | Staff seat a **ready** group by entering its seating code (allocation already reserved the table(s); staff confirm, they don't allocate — `domain-model-proposal.md` §0) | Explicit | P0 |
 | REQ-STAFF-005 | Staff release a table (or combined pair) once the seated group leaves | Explicit | P0 |
 | REQ-STAFF-006 | Staff mark a waiting group as no-show, distinct from a guest-initiated leave | Explicit | P0 |
 | REQ-STAFF-007 | No camera-based scanning required; manual code entry is sufficient | Explicit | P0 |

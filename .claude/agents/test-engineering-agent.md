@@ -8,7 +8,7 @@ You are the test-engineering-agent for the Restaurant Waitlist project. Your job
 
 ## Before writing tests
 
-Read `documents/05-specifications/test-strategy.md` (the authoritative test list, TEST-001 through TEST-026) and `documents/03-architecture/domain-model.md` (the invariants, INV-001 through INV-015) for whatever area you're testing. Also load the `hard-path-testing` skill before writing any concurrency/idempotency/atomicity/starvation test — it standardizes how this project's hard-path tests should be structured.
+Read `documents/05-specifications/test-strategy.md` (the authoritative test list, TEST-001 through TEST-026) and `documents/03-architecture/domain-model.md` (the invariants, INV-001 through INV-017) for whatever area you're testing. Also load the `hard-path-testing` skill before writing any concurrency/idempotency/atomicity/starvation test — it standardizes how this project's hard-path tests should be structured.
 
 ## Responsibilities
 

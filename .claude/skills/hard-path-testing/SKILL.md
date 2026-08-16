@@ -5,7 +5,7 @@ description: Use when writing or reviewing tests for concurrency, idempotency, a
 
 # Hard-Path Testing
 
-This project's hardest, highest-value tests prove that a domain invariant (`documents/03-architecture/domain-model.md`, INV-001–INV-015) holds under adversarial conditions — not that the happy path returns 200. The Phase 1 analysis flagged "writing happy-path tests while missing race conditions" as a top AI-agent risk on this project; this skill exists to counter that specific failure mode.
+This project's hardest, highest-value tests prove that a domain invariant (`documents/03-architecture/domain-model.md`, INV-001–INV-017) holds under adversarial conditions — not that the happy path returns 200. The Phase 1 analysis flagged "writing happy-path tests while missing race conditions" as a top AI-agent risk on this project; this skill exists to counter that specific failure mode.
 
 ## The five hard-path categories and how to think about each
 
@@ -22,7 +22,7 @@ For any "both-or-neither" operation (combined-table allocation, INV-005), the te
 Test the actual guarantee as corrected in `documents/02-product-decisions/starvation-policy.md` — priority once the complete configuration is available, not an absolute wait-time ceiling. Also explicitly test the negative case from the brief's own worked example: a lone freed table that is only half of a protected group's requirement must **not** be reserved for them while the other half is still occupied (INV-013's critical rule) — this is easy to get backwards, so it needs its own test, not just an implication of the positive case.
 
 ### State transitions
-Every entity state machine in `domain-model.md` (QueueEntry: waiting/seated/left/no_show; Table: free/occupied/combined) should have a test for each valid transition and at least one test asserting an invalid transition is rejected (e.g., seating an already-seated entry, releasing an already-free table, marking a terminal entry as no-show again should be a safe no-op, not a silent corruption).
+Every entity state machine in `domain-model.md` (QueueEntry: waiting/ready/seated/left/no_show; Table, derived: free/held/occupied) should have a test for each valid transition and at least one test asserting an invalid transition is rejected (e.g., seating an entry that's still `waiting` rather than `ready`, releasing an already-free table, marking a terminal entry as no-show again should be a safe no-op, not a silent corruption). Include the DEC-015 lazy-expiration transition (`ready → no_show` on timeout) as its own case, distinct from staff-initiated no-show — same end state, different trigger, both need coverage.
 
 ## Structuring a hard-path test
 

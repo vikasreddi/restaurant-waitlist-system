@@ -41,6 +41,8 @@ Do not skip from requirements straight to broad implementation. Every implementa
 - One group per table. A table cannot be reassigned until its current group leaves.
 - Maximum two-table combination (DEC-002). Combined allocation must be atomic — both tables or neither.
 - Combined tables behave as one seating unit while occupied; the combination dissolves after release.
+- A group becomes `ready` (table configuration reserved, seating code shown) *before* staff act — staff's "seat by code" confirms an already-made allocation decision, it does not perform allocation itself. Seating always requires having passed through `ready` first; there is no direct `waiting → seated` transition.
+- A `ready` reservation that isn't confirmed within the configured timeout (5 minutes, tunable) auto-releases via `no_show`, checked lazily wherever a `ready` entry is already being read — never by a background scheduler or Sidekiq job (DEC-015).
 - Release operates on the group's complete seating assignment (by `queue_entry_id`), never a raw `table_id` (DEC-014).
 - Position is dynamic, computed from current state only — never a promise of an exact count, never a prediction of when a table will free (DEC-005).
 - Seating is not FIFO. Compatibility is evaluated from current state; the smallest suitable available configuration is preferred; wait-time aging applies among tied competitors (`documents/02-product-decisions/seating-allocation-policy.md`).
@@ -57,7 +59,8 @@ Do not skip from requirements straight to broad implementation. Every implementa
 - Follow the specifications before implementation; validate assumptions against them rather than guessing.
 - Add tests for hard business rules — see `documents/05-specifications/test-strategy.md`.
 - Keep business logic out of controllers where possible; prefer domain/service objects when they make the allocation rules clearer.
-- Use database transactions wherever an invariant depends on atomicity (`documents/03-architecture/domain-model.md` INV-001–INV-015).
+- Use database transactions wherever an invariant depends on atomicity (`documents/03-architecture/domain-model.md` INV-001–INV-017).
+- A database-level exclusivity constraint must never depend on a value copied from another table staying in sync by application convention alone — express it using only the columns of the table being constrained (INV-016; this is the concrete lesson of a real caught mistake, `documents/06-ai-working-record/ai-corrections.md` CORR-004).
 - Do not invent product behavior. Do not silently expand scope.
 
 ## AI rules
@@ -102,7 +105,7 @@ Trade-off:
 
 ## Non-negotiable invariants (full list and IDs: `documents/03-architecture/domain-model.md`)
 
-Table invariant (one group per table) · Release invariant (a combined assignment releases as one unit) · Atomicity invariant (combined seating is all-or-nothing) · Idempotency invariant (a retried join never creates a second entry) · Source-of-truth invariant (PostgreSQL determines actual table state) · Compatibility invariant (a group is only assigned a configuration that can seat it) · Starvation invariant (a protected group gets priority once its complete configuration is available) · No-reservation invariant (an incomplete configuration never reserves an individual table indefinitely) · Scope invariant (future features are not introduced into the P0 implementation).
+Table invariant (one group per table) · Release invariant (a combined assignment releases as one unit) · Atomicity invariant (combined seating is all-or-nothing) · Idempotency invariant (a retried join never creates a second entry) · Source-of-truth invariant (PostgreSQL determines actual table state) · Compatibility invariant (a group is only assigned a configuration that can seat it) · Starvation invariant (a protected group gets priority once its complete configuration is available) · No-reservation invariant (an incomplete configuration never reserves an individual table indefinitely) · Scope invariant (future features are not introduced into the P0 implementation) · Self-contained-constraint invariant (a DB exclusivity constraint never depends on another table's column staying in sync, INV-016) · Ready-expiration invariant (an unconfirmed `ready` reservation auto-releases after a tunable timeout, checked lazily, INV-017).
 
 ## Phase boundary
 

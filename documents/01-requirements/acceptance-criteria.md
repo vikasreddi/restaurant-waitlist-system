@@ -19,7 +19,7 @@ Acceptance criteria per requirement, phrased as Given/When/Then. These are behav
 - Given the entry has reached a terminal state (seated, left, no-show), when the guest reopens the page, then it does not behave as an active waitlist session (see `06-guest-identity`).
 
 **REQ-GUEST-005 — Seating code**
-- Given a queue entry becomes eligible for seating, when the guest views the page, then a seating code is shown that staff can use to seat that specific group.
+- Given the allocation service selects a queue entry for a newly-available configuration (entry transitions `waiting → ready`), when the guest views the page, then a seating code is shown that staff can use to confirm that specific group's already-reserved table(s).
 
 **REQ-GUEST-006 — No persistence between visits**
 - Given a guest's entry reaches a terminal state, when they scan the QR code again on a new visit, then no prior visit data is surfaced to them and a new entry/token is required to join again.
@@ -36,8 +36,9 @@ Acceptance criteria per requirement, phrased as Given/When/Then. These are behav
 - Given the staff screen is open, when the underlying queue or table state changes, then the displayed queue and table states reflect current backend state (exact refresh mechanism is a P1 concern, not required to be live for P0).
 
 **REQ-STAFF-004 — Seat by code**
-- Given a valid, currently-waiting group's seating code, when staff submit it, then the correct table(s) are allocated to that group atomically and the entry transitions to "seated."
-- Given an invalid, already-used, or non-existent code, when submitted, then the operation is rejected with a clear error and no state changes.
+- Given a valid **`ready`** group's seating code — meaning its table(s) were already atomically reserved by the allocation service — when staff submit the code, then the reservation is confirmed and the entry transitions to "seated." Staff confirming does not itself choose or allocate tables; that decision was already made.
+- Given an invalid, already-used, non-existent, or not-yet-`ready` code, when submitted, then the operation is rejected with a clear error and no state changes.
+- Given a valid `ready` code whose reservation expired (DEC-015, 5-minute timeout) before staff submitted it, when submitted, then the operation is rejected with a distinct "reservation expired" outcome — the entry is `no_show`, not silently re-queued and not incorrectly seated.
 
 **REQ-STAFF-005 — Release**
 - Given a seated group's table(s), when staff mark them released, then the table(s) return to available (and, if combined, the combination dissolves per REQ-TABLE-008).

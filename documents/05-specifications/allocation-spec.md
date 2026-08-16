@@ -33,12 +33,19 @@ Run once, at join time, before a `QueueEntry` is ever created. This guarantees e
 ## 1. Compatibility function
 
 ```
+# "free" is derived, not a stored field (finalized Phase 5B.1 model —
+# 03-architecture/domain-model.md §2): a table is free iff no
+# SeatingAssignmentTable row with released_at IS NULL references it.
+function is_free(table):
+    return not exists SeatingAssignmentTable row
+                where table_id = table.id and released_at IS NULL
+
 function compatible_configurations(group_size):
     configs = []
-    for each free single table T where T.capacity >= group_size:
+    for each single table T where is_free(T) and T.capacity >= group_size:
         configs.add(SingleTable(T))
-    for each free adjacent pair (T1, T2) where T1.capacity + T2.capacity >= group_size
-                                          and T1.status == free and T2.status == free:
+    for each adjacent pair (T1, T2) where is_free(T1) and is_free(T2)
+                                       and T1.capacity + T2.capacity >= group_size:
         configs.add(CombinedPair(T1, T2))
     return configs
 ```
@@ -84,50 +91,100 @@ function update_starvation_protection():
 
 Run on a schedule or on every relevant read/write (implementation choice); `MAX_WAIT_THRESHOLD` is configurable (illustrated as 20 minutes, DEC-004). Crossing this threshold grants **priority once the group's complete configuration is available** — it does not itself guarantee an absolute maximum total wait (`starvation-policy.md`).
 
-## 5. Atomic allocation
+## 5. Atomic allocation — produces READY, not SEATED
+
+**Corrected from an earlier draft of this document, which had this function set `group.status = seated` directly.** That was wrong against the finalized model: allocation reserves a configuration and shows the guest a code — it does not seat them. Seating only happens later, when staff confirm (§5a). See `domain-model-proposal.md` §0 for the full reasoning behind why `ready` exists as a separate step.
 
 ```
 function allocate(group, configuration):
     begin transaction
         if configuration is SingleTable(T):
-            lock/check T is still free
-            if not free: rollback; return FAILURE
-            T.status = occupied; T.current_queue_entry_id = group.id
+            lock T (SELECT ... FOR UPDATE)
+            if not is_free(T): rollback; return FAILURE
+            create SeatingAssignment(queue_entry_id: group.id, status: pending)
+            create SeatingAssignmentTable(seating_assignment_id: assignment.id, table_id: T.id)
         else if configuration is CombinedPair(T1, T2):
-            lock/check T1 is still free AND T2 is still free
-            if either not free: rollback; return FAILURE   # both-or-neither, INV-005
-            create TableCombination(T1, T2, group.id)
-            T1.status = combined; T2.status = combined
-        group.status = seated
-        group.seated_at = now
+            lock T1, T2 in a consistent order (e.g. by id, to avoid deadlocks)
+            if not (is_free(T1) and is_free(T2)): rollback; return FAILURE   # both-or-neither, INV-005
+            create SeatingAssignment(queue_entry_id: group.id, status: pending)
+            create SeatingAssignmentTable(seating_assignment_id: assignment.id, table_id: T1.id)
+            create SeatingAssignmentTable(seating_assignment_id: assignment.id, table_id: T2.id)
+            # if either INSERT above violates the released_at-IS-NULL unique constraint
+            # (table claimed by a concurrent transaction between the lock and the insert),
+            # the transaction fails and rolls back — both claim rows or neither ever exist.
+        group.status = ready
+        group.ready_at = now
+        group.seating_code = generate_code()   # format: OPEN-005, still undecided
     commit transaction
     return SUCCESS
 ```
 
-Any failure path rolls back the entire transaction — no intermediate state (one table touched, the other not) is ever committed (INV-005, INV-008).
+Any failure path rolls back the entire transaction — no intermediate state (one table claimed, the other not; or an assignment row with no matching claim rows) is ever committed (INV-005, INV-008).
+
+## 5a. Staff confirmation — READY → SEATED
+
+Not part of allocation. This runs when staff submit a `seating_code` (`functional-spec.md` §6a) — a separate operation, on a separate trigger, from a separate actor.
+
+```
+function confirm_seating(seating_code):
+    begin transaction
+        group = load QueueEntry where seating_code = seating_code (SELECT ... FOR UPDATE)
+        if group not found or group.status != ready:
+            rollback; return NOT_FOUND_OR_INVALID
+        if group.ready_at + MAX_READY_WAIT < now:   # DEC-015 — expire instead of confirming a stale hold
+            expire_ready(group)   # see §6a below; converts to no_show, releases the assignment
+            rollback; return EXPIRED
+        assignment = group's pending SeatingAssignment
+        assignment.status = active; assignment.activated_at = now
+        group.status = seated; group.seated_at = now
+    commit transaction
+    return SUCCESS
+```
+
+Note what this function does **not** do: it never calls `compatible_configurations`, `eligible_groups`, or `select_group_for` — the allocation decision was already made and committed in §5. Staff confirmation only ever validates and activates an existing reservation.
 
 ## 6. Release
 
-Takes the seated `queue_entry_id` only — never a raw `table_id`/`combination_id` supplied by the caller (DEC-014, INV-015). This is already how the function is shaped below: it resolves internally which assignment the group holds and releases the whole thing atomically.
+Takes the seated `queue_entry_id` only — never a raw `table_id` supplied by the caller (DEC-014, INV-015). This is already how the function is shaped below: it resolves internally which assignment the group holds and releases the whole thing atomically.
 
 ```
 function release(queue_entry_id):
     begin transaction
         group = load QueueEntry(queue_entry_id)   # sole input; caller never names a table directly
-        if group.assigned_table_id is set:
-            table.status = free; table.current_queue_entry_id = null
-        else if group.assigned_combination_id is set:
-            combination.dissolved_at = now
-            for table in combination.tables:
-                table.status = free; table.current_queue_entry_id = null; table.combination_id = null
+        assignment = group's non-released SeatingAssignment
+        assignment.status = released; assignment.released_at = now
+        for claim_row in assignment's SeatingAssignmentTable rows:
+            claim_row.released_at = now   # NOT deleted — history retained (finalized design, see
+                                           # 06-ai-working-record/ai-corrections.md CORR-004)
     commit transaction
     trigger allocation re-evaluation for now-free configuration(s)   # see §3
 ```
 
+## 6a. Lazy READY expiration (DEC-015)
+
+Not a scheduled job. This function is called *inline*, as a check embedded in operations that already touch a `ready` entry or the tables it holds — never on its own timer.
+
+```
+function expire_ready(group):
+    # Precondition: caller already holds a lock on `group` (e.g., via confirm_seating above,
+    # or via whatever read/write path discovered the overdue entry) and has already verified
+    # group.status == ready and group.ready_at + MAX_READY_WAIT < now.
+    begin transaction
+        group.status = no_show; group.no_show_at = now   # same terminal state as staff-initiated no-show
+        assignment = group's pending SeatingAssignment
+        assignment.status = released; assignment.released_at = now
+        for claim_row in assignment's SeatingAssignmentTable rows:
+            claim_row.released_at = now
+    commit transaction
+    trigger allocation re-evaluation for now-free configuration(s)   # see §3
+```
+
+`MAX_READY_WAIT` is configurable (illustrated as 5 minutes, DEC-015) — same treatment as `MAX_WAIT_THRESHOLD` (§4). Called from: `confirm_seating` (§5a, before confirming a possibly-stale hold), any position/queue read that touches this entry, any allocation pass that would otherwise consider this entry's held table(s) as unavailable indefinitely. Two concurrent callers discovering the same overdue entry are serialized by the same row lock `confirm_seating` uses — whichever acquires it first performs the expiration; the second sees `status == no_show` already and no-ops.
+
 ## 7. Worked example — why smallest-fit prevents unnecessary waiting
 
-Group of 2 arrives when T1 (2-seat) is occupied but T2 (4-seat) is free. `compatible_configurations(2)` includes T2. `eligible_groups(T2)` includes this group (and possibly others needing ≤4). If no larger-need group is also eligible/older/protected for T2, this group is seated at T2 rather than waiting for T1 to free — directly implementing Stage 3 of `seating-allocation-policy.md`.
+Group of 2 arrives when T1 (2-seat) is occupied but T2 (4-seat) is free. `compatible_configurations(2)` includes T2. `eligible_groups(T2)` includes this group (and possibly others needing ≤4). If no larger-need group is also eligible/older/protected for T2, this group becomes `ready` at T2 (code shown, staff confirmation pending) rather than waiting for T1 to free — directly implementing Stage 3 of `seating-allocation-policy.md`. It is *not yet* `seated` at this point — that's a separate step, §5a, triggered by staff.
 
 ## 8. Worked example — combined-pair race (ties to `04-diagrams/05-combined-table-atomic-allocation.md`)
 
-Two staff actions both attempt `allocate(group, CombinedPair(T1, T2))` concurrently. The transactional lock/check in §5 ensures only one commits; the other observes T1 or T2 no longer free and returns `FAILURE` cleanly, with its group remaining `waiting` for re-evaluation.
+Two concurrent allocation passes both attempt `allocate(group, CombinedPair(T1, T2))` — this is a race between two *allocation* attempts (system-triggered, e.g. two tables freeing in quick succession each triggering a re-evaluation), not two staff actions; staff never call `allocate` directly. The transactional lock/check in §5 ensures only one commits; the other observes T1 or T2 no longer free and returns `FAILURE` cleanly, with its group remaining `waiting` for re-evaluation.

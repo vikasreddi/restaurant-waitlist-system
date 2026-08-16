@@ -19,7 +19,7 @@ You are the backend-domain-agent for the Restaurant Waitlist project. You implem
 - Never implement future fairness debt (`documents/07-future-evolution/fairness-debt.md`, `missed-opportunities.md`).
 - Never implement shared tables (`documents/07-future-evolution/shared-tables.md`) — the one-group-per-table invariant is non-negotiable.
 - Never use Redis as the source of truth for table availability — PostgreSQL decides, always, per `documents/02-product-decisions/decision-log.md` DEC-013 (`INV-014`).
-- Every allocation/release/seat/no-show write path must uphold the invariants in `documents/03-architecture/domain-model.md` (INV-001 through INV-015) under concurrent access — this usually means a database transaction with row-level locking (`SELECT ... FOR UPDATE` / `.lock!`), not an application-level check-then-act.
+- Every allocation/release/seat/no-show write path must uphold the invariants in `documents/03-architecture/domain-model.md` (INV-001 through INV-017) under concurrent access — this usually means a database transaction with row-level locking (`SELECT ... FOR UPDATE` / `.lock!`), not an application-level check-then-act.
 - Release is always identified by `queue_entry_id`, never a raw `table_id` (DEC-014, INV-015).
 - Add or modify tests alongside any domain change — do not hand off untested domain logic to a separate session and call the task done.
 - Do not invent product behavior for anything the specification doesn't cover. If you hit a genuine gap or contradiction, stop and report `BLOCKED — HUMAN DECISION REQUIRED` (format in `CLAUDE.md`) rather than guessing.

@@ -66,6 +66,26 @@ The three corrections below are genuine — each is a verifiable defect in the a
 
 ---
 
+### CORR-004 — Table-exclusivity index couldn't actually do what it claimed
+
+**Session:** Session 7 (Phase 5B.1 domain model proposal), corrected in Session 8 (human review of that proposal).
+
+**Prompt/context:** Phase 5B.1 asked the agent to propose a database-level constraint enforcing "one active occupant per table," as part of designing `SeatingAssignmentTable` (the join entity between `SeatingAssignment` and `Table`).
+
+**AI suggestion (what was actually written):** `05-specifications/domain-model-proposal.md` gave `SeatingAssignmentTable` its own `status` column ("denormalized copy of the parent assignment's status, written together in the same transaction") and proposed the exclusivity guarantee as a **partial unique index**: `UNIQUE (table_id) WHERE status IN ('pending','active')`. The document confidently described this as "the database-level enforcement of 'one group per table'... almost entirely from the constraint system."
+
+**Why it was incorrect/incomplete:** PostgreSQL partial-index predicates can only reference columns of the table the index is built on — they cannot reach into another table (here, the parent `seating_assignments.status`) to decide inclusion. The proposal's own denormalized-column workaround was syntactically valid, but its correctness then depended entirely on an *application-level promise* ("always written together in the same transaction") that nothing in the schema actually enforced — a bug, a partial update, or a future engineer forgetting the pairing would silently break the exclusivity guarantee the document claimed was database-level. This is the same overclaiming pattern as CORR-001 (a guarantee stated more confidently than the underlying mechanism actually delivers), recurring at the schema-design level this time instead of the policy-wording level.
+
+**How the human identified the issue:** Direct review of the proposed constraint against actual PostgreSQL partial-index semantics — the human caught that the predicate as designed could not reference the parent's status at all, and separately noticed the readiness-hold-forever gap (see the open-decision item this closes, `documents/05-specifications/domain-model-proposal.md` §16 item 2).
+
+**Correction:** Removed the `status` column from `SeatingAssignmentTable` entirely. The corrected design uses row *existence* instead of a status flag: a claim row is created when a `SeatingAssignment` is formed and **deleted** (not status-flagged) when it's released. Table exclusivity is then a single **plain** unique index on `table_id` — no predicate, no cross-table reference, no denormalization to keep in sync. `held` vs. `occupied` (pending vs. active assignment) becomes a read-time join to the parent's status, not a write-time concern for the claim row.
+
+**Final decision:** The corrected design is adopted throughout `domain-model-proposal.md` (§0, §2, §4, §5, §6, §13) — not just noted as a caveat. The underlying entity choice (a join table over two nullable FK columns) was correct and unchanged; only its specific shape needed the fix.
+
+**Resulting specification change:** `05-specifications/domain-model-proposal.md` §0 (new revision items 6–7), §2 (`SeatingAssignmentTable` entity), §3 (relationship diagram wording), §4 (constraints table), §5 (indexes table), §6 (Table/SeatingAssignment state diagram), §11 (concurrency plan), §13 (Combination representation alternatives).
+
+---
+
 ## Template for future real examples
 
 ```

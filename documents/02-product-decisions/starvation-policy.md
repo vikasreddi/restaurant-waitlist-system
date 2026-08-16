@@ -12,7 +12,7 @@ Groups requiring a combined configuration (per the seed data, effectively groups
 
 ## Chosen policy
 
-A **configurable maximum-wait threshold** (illustrated as 20 minutes for this take-home; explicitly not a claimed real-restaurant number). Below the threshold, the group is seated under ordinary compatibility + smallest-fit + wait-time-aging rules (`seating-allocation-policy.md`, Stages 1–4). At and beyond the threshold, the group becomes **starvation-protected**: when its complete required configuration becomes simultaneously available, it receives priority for that configuration over other groups that only just became eligible for it.
+A **configurable maximum-wait threshold** (illustrated as 20 minutes for this take-home; explicitly not a claimed real-restaurant number). Below the threshold, the group is allocated (becomes `ready` — not yet seated; see `seating-allocation-policy.md` Stage 6) under ordinary compatibility + smallest-fit + wait-time-aging rules (`seating-allocation-policy.md`, Stages 1–4). At and beyond the threshold, the group becomes **starvation-protected**: when its complete required configuration becomes simultaneously available, it receives priority for that configuration over other groups that only just became eligible for it.
 
 Protection is scoped to the **complete seating opportunity**, never a lone table — a single free table that is only half of what a protected group needs is not withheld from smaller groups while its partner is still occupied, since holding it back would not actually help the protected group and would only reduce table utilization.
 

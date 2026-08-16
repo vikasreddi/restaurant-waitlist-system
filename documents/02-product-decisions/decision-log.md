@@ -281,6 +281,31 @@ Redis, if built, sits only in front of the **guest read path** (REQ-SHOW-002) an
 
 ---
 
+## DEC-015 — READY reservation expiration policy (resolves OPEN-007 for the `ready` state)
+
+**Context.** Phase 5B.1 domain-model analysis (`05-specifications/domain-model-proposal.md`) introduced a `ready` `QueueEntry` state — a group whose configuration has been chosen and whose table(s) are provisionally held, waiting for staff to confirm via the seating code. Human review of that proposal identified that nothing prevented a `ready` reservation from holding its table(s) indefinitely if the group never showed up and staff never got around to marking them no-show — a real starvation/utilization risk the proposal itself had only flagged as an open question, not resolved.
+
+**Chosen approach.**
+
+```
+WAITING → READY → (5-minute timeout, no staff confirmation) → NO_SHOW → reserved tables released atomically
+```
+
+- **Outcome on expiry:** auto-`no_show`. A `ready` entry whose reservation has been held past the timeout transitions to the existing terminal `no_show` state — the same state and release path staff already use manually, not a new terminal state.
+- **`ready → waiting` is explicitly NOT used for this.** A demote-back-into-the-queue path was considered and rejected for the MVP (see Trade-offs).
+- **Evaluation mechanism: lazy, not a background sweep.** No Sidekiq job, scheduler, or periodic process is introduced. Overdue `ready` reservations are expired inline, as a side effect of operations that already touch the relevant entries/tables: guest position/read, staff queue/table view, guest join, allocation/availability calculation, and seating operations. Before an allocation decision considers a table, any stale `ready` reservation holding it is expired and released first, in the same transaction as the decision that needs the table.
+- **Duration:** 5 minutes. A tunable configuration value (env/config, not a hardcoded literal in business logic and not a database-persisted setting) — the same treatment as the starvation threshold in DEC-004.
+
+**Rationale / documented trade-off (verbatim, as the record of this decision):**
+
+> A READY reservation expires after 5 minutes and becomes NO_SHOW if staff has not confirmed the seating code. This prevents tables from being held indefinitely and keeps the MVP state machine simple. Lazy expiration avoids introducing scheduler/background-job infrastructure solely for this timeout. The trade-off is that a guest may lose their place if the delay was caused by staff rather than the guest. A future version could distinguish guest timeout from staff-caused expiration and return the guest to WAITING while preserving the original waiting timestamp.
+
+**Implementation scope.** P0 — this closes a real correctness gap in the P0 state machine (an unbounded hold was possible without it), not a P1 nicety.
+
+**Future evolution.** Distinguishing guest-caused vs. staff-caused expiration, and a `ready → waiting` re-queue path preserving original wait time, per the trade-off note above — not built now.
+
+---
+
 ## Open decisions (not yet made — tracked, not resolved here)
 
 These remain open and must not be silently decided by an agent. See `01-requirements/requirements-analysis.md` and the Phase 1 analysis for full context. Resolved items (OPEN-001, OPEN-003, OPEN-004, OPEN-006) have been moved into the decision entries above and are removed from this list.
@@ -289,6 +314,6 @@ These remain open and must not be silently decided by an agent. See `01-requirem
 |---|---|---|
 | OPEN-002 | Live-update mechanism (polling vs. SSE vs. WebSockets) | Still pending — not addressed by this review round |
 | OPEN-005 | Seating-code format/strength | Pending specification phase |
-| OPEN-007 | Guest abandonment/expiration behavior (no explicit timeout requirement given) | Pending specification phase |
+| OPEN-007 | Guest abandonment/expiration behavior | **Partially resolved** by DEC-015 — the `ready`-state case (a called group that never shows up) is decided. The `waiting`-state case (a guest who stops polling but is never called) remains open; lower urgency, since an unwatched `waiting` entry holds no table hostage the way a `ready` one does. |
 
 **Note on OPEN-004 (idempotency key format).** Partially resolved by this review round: the join idempotency key is client-generated (a UUID is sufficient) and reused verbatim across retries of the same logical attempt; a genuinely new join attempt uses a new key (`05-specifications/api-spec.md`, `04-diagrams/06-guest-join-idempotency.md`). The exact transport (header vs. body field) remains an implementation-phase detail, not elevated to a standalone open item.

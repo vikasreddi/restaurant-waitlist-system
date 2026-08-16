@@ -26,7 +26,9 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Auth:** active-visit token.
 
-**Response 200 (non-terminal entry):** `{ entry_id, status: "waiting", position, seating_code (if allocated) }`
+**Response 200 (`waiting`):** `{ entry_id, status: "waiting", position }`
+
+**Response 200 (`ready`):** `{ entry_id, status: "ready", seating_code }` — no `position` field; the group has already been allocated a configuration and is waiting on staff confirmation, not on other groups. This read is itself a DEC-015 lazy-expiration checkpoint — if this entry's reservation is overdue, it's expired (→ `no_show`) before the response is built.
 
 **Response 200 (terminal entry):** `{ status: "seated" | "left" | "no_show" }` — no live position field, since it no longer represents an active session (DEC-006).
 
@@ -52,23 +54,29 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Auth:** staff session.
 
-**Response 200:** list of waiting entries with `{ entry_id, group_size, joined_at, position, is_starvation_protected }`.
+**Response 200:** list of `waiting` entries (`{ entry_id, group_size, joined_at, position, is_starvation_protected }`) and `ready` entries (`{ entry_id, group_size, ready_at, seating_code }`, no `position`) — staff can see which groups are already reserved and waiting on confirmation, distinct from those still in line. This read is a DEC-015 lazy-expiration checkpoint for any `ready` entries it touches.
 
 ### `GET /staff/tables`
 
 **Auth:** staff session.
 
-**Response 200:** list of tables with `{ table_id, capacity, status, current_queue_entry_id (if occupied), combination_id (if combined) }`.
+**Response 200:** list of tables with `{ table_id, capacity, status, current_queue_entry_id (if held/occupied), seating_assignment_id (if held/occupied) }` — `status` (`free`/`held`/`occupied`) is derived at read time (`03-architecture/domain-model.md` §2), not a stored table field. `held` means claimed by a `pending` assignment (a `ready` group awaiting confirmation); `occupied` means claimed by an `active` one (`seated`). `seating_assignment_id` replaces the old `combination_id` and applies uniformly whether the assignment covers one table or two.
 
-### `POST /staff/seat` — Seat by code
+### `POST /staff/seat` — Seat by code (confirmation, not allocation)
+
+**Behavior note:** by the time this endpoint is called, the table decision has already been made — the allocation service reserved a configuration and generated the code at `waiting → ready` time (`functional-spec.md` §6). This endpoint only validates and confirms an existing reservation; it never runs the allocation algorithm itself.
 
 **Request:** `{ seating_code }`
 
 **Response 200 (success):** `{ entry_id, status: "seated", table_ids: [...] }`
 
-**Response `conflict`:** required table(s) no longer available at commit time — no partial allocation ever occurs (INV-005).
+**Response `not_found` / `validation_error`:**
+- Unknown code.
+- Code belongs to an entry that isn't currently `ready` — already `seated` (code already used), already terminal (`left`/`no_show`), or still `waiting` (shouldn't be possible if codes are only ever generated on entering `ready`, but validated defensively).
 
-**Response `not_found` / `validation_error`:** unknown, already-used, or non-waiting code.
+**Response `conflict`:**
+- The entry's reservation expired (DEC-015) in the narrow window between the code being shown and staff submitting it — the request lands after the lazy-expiration check has already converted the entry to `no_show`. The entry is **not** silently returned to `waiting`; staff see a clear "reservation expired" message, distinct from "unknown code."
+- The reservation was released by a concurrent operation for some other reason before this request's transaction committed — no partial allocation ever occurs (INV-005), and this endpoint never performs a *new* allocation attempt on conflict (unlike the old synchronous-allocation design) — it simply reports the conflict.
 
 ### `POST /staff/seating-assignments/release` — Release seating assignment
 

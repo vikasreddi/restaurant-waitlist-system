@@ -95,6 +95,7 @@ When a configuration is selected for a group:
 - Combined-table allocation reserves all required tables atomically.
 - If any required table cannot be acquired at commit time (e.g., lost a race to another allocation), the entire allocation fails — no partial combination is ever left in place.
 - This directly implements REQ-TABLE-006 and INV-005 (`03-architecture/domain-model.md`).
+- **The outcome of this stage is the group becoming `ready`** (table(s) reserved, seating code generated) — **not** `seated`. Seating happens later, when staff confirm the code (`05-specifications/allocation-spec.md` §5a) — a separate operation this policy does not govern. This policy's job ends the moment a configuration is committed to a group.
 
 ## Explicitly out of scope for this policy (see `07-future-evolution/`)
 
