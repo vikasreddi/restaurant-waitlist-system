@@ -560,3 +560,38 @@ Then resume Prompt 5 from §5 (Backend Bootstrap) onward.
 **Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
 
 **Next session (not yet run):** Phase 5B.6 or equivalent — staff confirmation (seat-by-code), and/or release/guest-leave implementation (which would then also need their own allocation-trigger integration), per whatever the candidate authorizes next.
+
+---
+
+## Session 18 — 2026-08-16 — Phase 5B.6: staff seating confirmation
+
+**Environment:** Claude Code CLI, same repository, continuing directly from Session 17 in the same conversation.
+
+**Phase 5B.6 — Staff Seating Confirmation.** The candidate's governing prompt (`Phase_5B_6_Staff_Seating_Confirmation_Prompt(1).md`) was delivered complete in one piece. The first staff-facing endpoint implemented in the project. `api-spec.md`'s `POST /staff/seat` was already fully specified (route, request, response, most error cases) from an earlier phase — followed exactly, not re-invented.
+
+**Implementation:**
+- `Staff::ConfirmSeatingService` (`.call(seating_code:)`) — looks up the `QueueEntry` by `seating_code` (the existing unique partial index, never by id/phone/token/idempotency-key), locks it, locks its `current_seating_assignment`, re-checks state under lock, and atomically transitions `ready`+`pending → seated`+`active` in one transaction. Never creates a new `SeatingAssignment`/`SeatingAssignmentTable` row, never generates a new `seating_code`, never touches `Table` records, never calls any `Allocation::*` class.
+- `Staff::SeatController` (`POST /staff/seat`) — thin, translates the service's `Result` into `200`/`404`/`409`.
+- **No staff authentication.** No session/login mechanism exists anywhere in this codebase (`StaffUser` has `has_secure_password` but no login endpoint — deferred every phase since 5B.2). Per this phase's own explicit §15 instruction, no authentication subsystem was built; the endpoint is unauthenticated, and this gap is documented explicitly in `api-spec.md`, `traceability.md`, and this entry rather than silently built or silently ignored.
+
+**Two genuine, self-caught issues this session, both recorded in `ai-corrections.md`:**
+- **CORR-008:** `api-spec.md`'s own `POST /staff/seat` section had two error-case bullet lists that directly contradicted each other on where a `left`/`no_show` code belongs (`not_found` in one bullet, `conflict` in the other, for the identical scenario). Resolved using a mechanism the document itself hadn't stated explicitly — a `seating_code` only ever exists on an entry that was `ready` at some point, so `left`/`no_show` found via that code is always "was valid, now isn't," never "unknown" — and rewrote the section to be internally consistent.
+- **CORR-009:** the initial implementation (which passed its own first 16 tests) never checked `functional-spec.md` §6a step 2's explicit requirement that staff confirmation is *itself* one of DEC-015's lazy-expiration checkpoints — an entry that's still `ready` in the database but actually past its reservation deadline (because nothing else had touched it since) would have been silently confirmed as `seated` instead of correctly expiring to `no_show`. Caught while writing this session's documentation, not by a failing test (the gap was in what the tests never exercised). Fixed, with the fix itself respecting this phase's own explicit boundary that confirmation must never call `Allocation::Orchestrator` — the freed table is deliberately left for the *next* trigger to pick up, not synchronously reallocated here.
+
+**Tests: 27 new**, across `confirm_seating_service_test.rb` (19 tests — successful transition, unknown/blank code, defensively-checked waiting, already-seated repeated-confirmation, left, no_show, released-assignment inconsistency, repeated confirmation doesn't duplicate, atomicity, forced rollback via a temporary method patch since this project's plain-minitest setup has no `any_instance`/mocha, combined 2-table confirmation, no additional rows, seating_code never regenerated, `Table` records never modified, no allocation side effect, and the three new DEC-015-at-confirmation-time tests from CORR-009), `confirm_seating_service_concurrency_test.rb` (1 real-thread PostgreSQL concurrency test), `seat_controller_test.rb` (7 real-HTTP integration tests including a guest-current-status-reflects-seated check).
+
+**Verification actually performed, not claimed without running it:**
+- Full suite: 214 runs, 464 assertions, 0 failures, 0 errors, 0 skips — confirmed stable across 3 consecutive full-suite runs, and the concurrency test specifically re-run 6 times standalone with zero failures.
+- Manual verification (§28's full 10-step sequence) against the running `backend` container's development database, disposable data: joined a guest against one free table (synchronously `ready`), fetched the `seating_code` via `GET /guest/queue-entries/current`, confirmed via `POST /staff/seat` (`200`, correct `table_ids`), verified DB state (`seated`/`active`/`released_at: nil`), re-read guest status (`{"status":"seated"}`), repeated the same confirmation (`409 conflict`, no duplicate `SeatingAssignment`), and confirmed the 40-table seed baseline was restored exactly after cleanup. A separate manual pass specifically exercised the CORR-009 fix (an already-overdue `ready` reservation correctly expired to `no_show`/`released` with a `409` on confirmation attempt, table freed, baseline restored afterward).
+
+**Documentation updated:** `api-spec.md` (`POST /staff/seat`'s error-response section rewritten per CORR-008; new "Implementation status (Phase 5B.6)" note documenting the no-authentication gap and confirming the no-allocation-side-effect boundary), `01-requirements/traceability.md` (REQ-STAFF-004 row filled in, explicitly noting the missing authentication).
+
+**Security/secrets check:** reviewed the diff — no passwords, API keys, tokens, `.env` files, or machine-specific secrets. The lack of staff authentication was deliberately treated as a documented functional gap (per this phase's own explicit instruction), not something to paper over with a fake/stub credential check that would misrepresent the endpoint's actual security posture.
+
+**AI working record updated this session:** `agent-prompts.md` (Prompt 20), `session-log.md` (this entry), `agent-decisions.md` (Session 18 — the error-taxonomy resolution reasoning, the lock-ordering choice, the deliberate no-orchestrator-call-even-when-expiring boundary, the duplicated-vs-extracted DEC-015-check decision). **CORR-008** and **CORR-009** in `ai-corrections.md`.
+
+**Scope boundary honored:** no staff authentication system/registration/management/UI, no release endpoint, no guest leave endpoint, no automatic allocation after release, no Redis/Sidekiq/notifications/live updates/frontend/rate limiting/analytics, no missed-opportunity tracking, no fairness debt, no predictive demand, no runtime AI allocation. Only `backend/app/services/staff/confirm_seating_service.rb`, `backend/app/controllers/staff/seat_controller.rb`, `backend/config/routes.rb` (one route added), their new tests, and the two documentation files above were touched.
+
+**Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
+
+**Next session (not yet run):** Phase 5B.7 or equivalent — staff release, guest leave (and their allocation-trigger integration), and/or staff authentication, per whatever the candidate authorizes next.

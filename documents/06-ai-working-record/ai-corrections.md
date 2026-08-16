@@ -154,6 +154,46 @@ function update_starvation_protection():
 
 ---
 
+### CORR-008 — `api-spec.md`'s own two error-case bullet lists for staff seat-by-code directly disagreed on where `left`/`no_show` codes belong
+
+**Session:** Session 18 (Phase 5B.6, staff seating confirmation).
+
+**Prompt/context:** Implementing `Staff::ConfirmSeatingService` against `api-spec.md`'s already-specified `POST /staff/seat` endpoint (route/request/response were not in question — only the precise error-category mapping for each invalid-state case, per this phase's own governing prompt §19's list of required error cases).
+
+**AI suggestion (what was already written, from an earlier phase):** `api-spec.md`'s `POST /staff/seat` section had two separate bullet lists: the `not_found`/`validation_error` list included "already terminal (`left`/`no_show`)" as one of its examples, while the *separate* `conflict` list's first bullet described, in detail, "the entry's reservation expired (DEC-015)... the request lands after the lazy-expiration check has already converted the entry to `no_show`" as a `conflict` case — the exact same scenario (a `no_show` entry found via `seating_code`), categorized two different ways in two different bullets of the same document.
+
+**Why it was incorrect/incomplete:** These two bullets cannot both be correct for the same input. Worse, the contradiction is resolvable by a mechanism the document itself doesn't state explicitly: a `seating_code` is *only ever* set on an entry at the moment it becomes `ready` (functional-spec.md §1/§6) and is never cleared or regenerated — so a `left`/`no_show` entry found via a `seating_code` lookup is, by construction, *always* "a reservation that was valid and has since ended," never a case that could be confused with "unknown code" or "never had a valid reservation" (which is what `not_found` should mean). The `not_found` bullet's inclusion of `left`/`no_show` was the imprecise one; the `conflict` bullet's detailed DEC-015 reasoning was the correct, more carefully-derived one.
+
+**How the human identified the issue:** Not human-caught — self-caught while implementing `Staff::ConfirmSeatingService#classify` and needing to decide, definitively, which outcome a `no_show` entry should map to; re-reading both bullet lists side by side surfaced the direct disagreement.
+
+**Correction:** `api-spec.md`'s `POST /staff/seat` error section rewritten: `not_found` now covers only unknown codes and the (practically unreachable, defensively-checked) `waiting` case; `conflict` now explicitly covers three distinct sub-cases — already-confirmed (`seated`), no-longer-valid (`left`/`no_show`, with the mechanistic reasoning stated directly in the spec this time), and inconsistent/released-assignment. `Staff::ConfirmSeatingService#classify` implements this corrected mapping exactly, verified by dedicated tests for each state (`confirm_seating_service_test.rb`).
+
+**Final decision:** The corrected three-way `conflict` categorization is adopted in `api-spec.md` itself (not just in code) — a future reader of the spec alone, without reading the implementation, now gets the same, internally-consistent answer.
+
+**Resulting specification change:** `documents/05-specifications/api-spec.md` — `POST /staff/seat`'s error-response section rewritten as described above, with an inline note cross-referencing this entry.
+
+---
+
+### CORR-009 — Staff confirmation initially skipped DEC-015's lazy-expiration checkpoint that `functional-spec.md` §6a explicitly requires
+
+**Session:** Session 18 (Phase 5B.6, staff seating confirmation) — same session as CORR-008, caught slightly later in the same session.
+
+**Prompt/context:** `functional-spec.md` §6a step 2 (already-approved, pre-dating this phase): "Confirm the entry's `SeatingAssignment` is still `pending` and has not been released/expired out from under it (DEC-015's lazy check applies here too — if this specific entry's own reservation is found to be overdue at the moment staff submit, the same expiration path fires instead of confirming a stale hold)." This is an explicit, specific requirement that the staff confirmation endpoint is *itself* one of DEC-015's lazy-expiration checkpoints, alongside the guest current-status read already implemented in Phase 5B.4.
+
+**AI suggestion (what was actually written first):** The initial `Staff::ConfirmSeatingService#classify` checked only `entry.status` and `assignment.status` directly against the database — `ready` + `pending` → confirm as `seated`/`active`. It never checked `assignment.expires_at` against the current time at all. This initial version passed its own first 16 tests (all of which used a fresh, non-overdue `expires_at`) and was, at that point, believed complete.
+
+**Why it was incorrect/incomplete:** A `ready` entry whose reservation deadline had already passed, but which no *other* operation had happened to read/write since that deadline (so DEC-015's lazy check had never fired for it), would still show `entry.status == "ready"` and `assignment.status == "pending"` in the database — indistinguishable, by that check alone, from a genuinely still-valid reservation. The initial implementation would have confirmed it as `seated`, silently seating a guest whose reservation had actually expired and whose table(s) should instead have been released back to the pool — a real violation of DEC-015/INV-017 (an unconfirmed `ready` reservation past its timeout must auto-release, not be confirmable), reachable any time staff happen to submit a code slightly after the 5-minute window with nothing else having touched that specific entry in between.
+
+**How the human identified the issue:** Not human-caught — self-caught while writing this phase's documentation update and re-reading `functional-spec.md` §6a line-by-line against the implementation to make sure the doc update was accurate, rather than assuming the already-passing tests meant the spec was fully satisfied. The gap was in what the tests never exercised (an overdue-but-untouched `ready` entry), not in what they asserted incorrectly.
+
+**Correction:** `Staff::ConfirmSeatingService#call` now checks `overdue?(assignment)` before attempting confirmation; if the entry is `ready` but genuinely overdue, it runs the same expire-to-`no_show`-and-release effect `Guest::CurrentQueueStatusService#expire_if_overdue` already implements (duplicated logic, not extracted — two call sites doesn't yet justify a shared abstraction per CLAUDE.md's "don't add abstractions beyond what's needed"), returns `:conflict` ("no longer valid"), and — critically — lets that expiration **commit** rather than rolling it back (a rejected confirmation attempt changes nothing, but a genuine expiration is a real state transition that must persist). Three new tests added (`confirm_seating_service_test.rb`) covering: the entry is correctly expired rather than confirmed; the expiration is actually persisted (verified via a fresh query, not the in-memory objects the service already touched); and — per this phase's own explicit §25 boundary — the newly-freed table is deliberately *not* synchronously reallocated by this service, since `Allocation::Orchestrator` must never be called from staff confirmation, even from this expiration branch.
+
+**Final decision:** Staff confirmation is now a real DEC-015 lazy-expiration checkpoint, matching `functional-spec.md` §6a exactly. The resulting freed-table-not-reallocated gap (this service correctly expires the reservation but, per its own explicit phase boundary, cannot trigger the orchestrator to fill it) is accepted as a deliberate, documented limitation, not silently left ambiguous — the table remains free and lazily available to the *next* trigger (a future guest join or guest status read), consistent with DEC-015's own "lazy, no delivery guarantee" design.
+
+**Resulting specification/code change:** `backend/app/services/staff/confirm_seating_service.rb` (the fix, plus an extensive comment explaining the deliberate no-orchestrator-call boundary), `backend/test/services/staff/confirm_seating_service_test.rb` (three new regression tests plus a `build_ready_entry` helper extended to accept a controllable `expires_at`). No specification text needed to change — `functional-spec.md` §6a was already correct; the implementation just hadn't fully matched it yet.
+
+---
+
 ## Template for future real examples
 
 ```

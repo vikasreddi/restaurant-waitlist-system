@@ -18,6 +18,16 @@ Rails.application.routes.draw do
     end
   end
 
+  # Staff seat-by-code (confirmation, not allocation) — matches the route
+  # already defined in documents/05-specifications/api-spec.md. No staff
+  # authentication exists anywhere in this codebase yet (StaffUser has no
+  # login endpoint/session mechanism, deferred every phase since 5B.2) — this
+  # endpoint is therefore unauthenticated, a known, explicitly-documented gap
+  # (Phase 5B.6), not silently introduced.
+  namespace :staff do
+    post "seat" => "seat#create"
+  end
+
   # Defines the root path route ("/")
   # root "posts#index"
 end

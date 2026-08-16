@@ -769,6 +769,7 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 - Prompt 17 (below) authorized the first allocation application code — a pure, side-effect-free decision engine implementing the now-locked algorithm, explicitly stopping short of any database mutation, table locking, or `SeatingAssignment` creation — supplied complete as `Phase_5B_5_2_Pure_Allocation_Decision_Engine_Prompt.md`.
 - Prompt 18 (below) authorized connecting that pure engine to the real database — table locking, atomic reservation, `SeatingAssignment`/`SeatingAssignmentTable` creation, `seating_code` generation — for exactly one candidate per call, explicitly stopping short of any automatic trigger wiring — supplied complete as `Phase_5B_5_3_Transactional_Allocation_Table_Reservation_Prompt(1).md`.
 - Prompt 19 (below) authorized connecting the already-tested allocation components to real business events (Guest Join, Release, No-show, Guest Leave) and adding a repeated-allocation orchestrator, explicitly requiring genuine specification/implementation gaps (no release or leave code path exists yet) to be reported as deferred rather than invented — supplied complete as `Phase_5B_5_4_Allocation_Trigger_Integration_Prompt(1).md`.
+- Prompt 20 (below) authorized the staff-facing confirmation step — READY+PENDING → SEATED+ACTIVE by `seating_code` — explicitly forbidding any new allocation, table selection, or a full staff-authentication subsystem, while requiring the deferred-authentication status to be clearly reported rather than silently built or silently ignored — supplied complete as `Phase_5B_6_Staff_Seating_Confirmation_Prompt(1).md`.
 
 ---
 
@@ -1241,3 +1242,83 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 > **§40 Strictly not implemented — confirm remain absent:** staff confirmation API, staff seating workflow, staff authentication, Redis, Sidekiq, background notification jobs, notifications, live updates, frontend business flows, rate limiting, analytics, missed-opportunity tracking, fairness debt, predictive demand, runtime AI allocation.
 >
 > **§41 Final report format:** PASS/BLOCKED status; 1. Orchestrator (class, public method, responsibilities); 2. Trigger Integration (which of Guest Join/Release/No-show/Guest Leave were actually integrated, explicitly stating "deferred" for anything not sufficiently specified); 3. Repeated Allocation (pass 1 → reservation → fresh state → pass 2 → ... → no candidate → stop); 4. Recalculation (how availability/compatibility/scarcity/aging/starvation are recomputed); 5. Concurrency (how stale/concurrency-loss results are handled); 6. Tests (Total/Passed/Failed/Skipped + critical orchestration tests); 7. API Verification (guest join/status behavior and any response-contract implications); 8. Documentation; 9. AI Working Record; 10. Git (commit/message/working tree); 11. Scope Verification (staff APIs, Redis, Sidekiq, notifications, live updates, frontend, future fairness/AI functionality all confirmed deferred). End exactly with: "Phase 5B.5.4 is complete. Allocation trigger integration and repeated allocation orchestration are implemented and verified. Business events can now invoke the existing deterministic decision engine and transactional reservation service, with a fresh candidate grid recomputed after each successful allocation. Staff confirmation, Redis/Sidekiq, notifications, live updates, frontend business flows, and other Phase 5B.6+ functionality remain deferred. No Phase 5B.6+ functionality was implemented in this phase." STOP.
+
+---
+
+## Prompt 20 — Phase 5B.6: Staff Seating Confirmation
+
+**Source:** `Phase_5B_6_Staff_Seating_Confirmation_Prompt(1).md` (candidate-authored, read from `~/Downloads/`), delivered complete in a single message.
+
+**Session context:** the staff action that takes a READY reservation and confirms the guest has actually been seated — `QueueEntry: READY → SEATED`, `SeatingAssignment: PENDING → ACTIVE`. Allocation itself is already implemented (Phase 5B.5.x) and explicitly must not be reimplemented or re-invoked here.
+
+**Full text (condensed; all 35 numbered sections' substantive content preserved):**
+
+> **§1 Read first:** `CLAUDE.md`, `api-spec.md`, `functional-spec.md`, `allocation-spec.md`, `allocation-algorithm.md`, `domain-model.md`, `data-model.md`, `test-strategy.md`, `01-requirements/traceability.md`; inspect `backend/app/models/`, `app/services/`, `app/services/allocation/`, `app/controllers/`, `config/routes.rb`, `test/`, `db/schema.rb`. Look specifically for: existing `StaffUser` model, staff-authentication assumptions, `seating_code` field, `SeatingAssignment`/`QueueEntry` state, existing API/error conventions. Do not invent an architecture that conflicts with existing conventions.
+>
+> **§2 Phase boundary — implement ONLY** READY→staff-confirms→SEATED and `pending`→`active`. Do NOT implement: staff authentication system, staff registration, passwords/login/JWT, staff management, release endpoint, guest leave endpoint, notifications, Redis, Sidekiq, live updates, frontend, analytics, rate limiting, staff UI, table-management UI, new allocation algorithm/scoring, repeated allocation logic, runtime AI. If authentication is required by the spec but not yet implemented, do NOT build a complete authentication subsystem — use the existing documented authentication boundary or explicitly report that authentication remains deferred.
+>
+> **§3 Core business flow:** join → allocation → READY/PENDING → seating_code generated → guest sees code → staff enters code → validate READY/PENDING → SEATED/ACTIVE. The staff action must NOT allocate a table, must NOT select a different table, must NOT create another assignment — it only confirms the assignment allocation already created.
+>
+> **§4 API contract:** inspect the authoritative `api-spec.md` first — if the staff confirmation endpoint is already specified, follow it exactly; if not, do not silently invent a public contract (identify the missing decision, check related requirements, document a clearly-implied contract, or stop and report the ambiguity). Illustrative-only shape given: `POST /staff/.../seating/confirm` with `{ seating_code }` — the repository's authoritative spec wins.
+>
+> **§5 Seating code lookup:** the seating code is the lookup key, via the existing unique partial index/constraint (`seating_code WHERE seating_code IS NOT NULL`). Do NOT look up by `QueueEntry` id, phone number, `active_visit_token`, `idempotency_key`, or table id.
+>
+> **§6 Valid state:** confirmation is valid only when `QueueEntry.status == ready` AND `SeatingAssignment.status == pending`, both representing the same reservation. Expected transition: `ready → seated` / `pending → active`, atomically.
+>
+> **§7 Invalid states:** must NOT succeed for `WAITING`/`SEATED`/`LEFT`/`NO_SHOW` entries or a `RELEASED`/`ACTIVE` assignment — return the appropriate documented conflict/not-found response; don't invent a new error taxonomy if one already exists.
+>
+> **§8 Atomic transaction:** one transaction — begin, locate by `seating_code`, lock relevant rows, re-check `assignment.status == pending` and `queue_entry.status == ready`, update assignment→active and entry→seated, commit; rollback on any failure. Never leave `assignment=active`+`queue_entry=ready` or `assignment=pending`+`queue_entry=seated` after a successful transaction.
+>
+> **§9 Concurrency:** two staff requests submitting the same code near-simultaneously — A locks, transitions, commits; B waits for the lock, re-checks, sees already SEATED/ACTIVE, does NOT perform a second transition. Only one confirmation succeeds; the second gets the appropriate conflict/already-confirmed response. No application-level mutexes — PostgreSQL row locking and the existing transaction model only.
+>
+> **§10 Locking:** inspect domain relationships and lock the minimal correct rows — at minimum the `SeatingAssignment` and `QueueEntry` state transitions must be protected; deterministic lock ordering if multiple rows are locked; do not lock tables unnecessarily (they're already reserved by the pending assignment — confirmation is a state transition, not a new allocation).
+>
+> **§11 Table occupancy:** confirmation must NOT change `Table` records — do NOT add `Table.status = occupied`. Occupancy remains derived from `SeatingAssignmentTable`; the `pending → active` transition is what changes the *derived* table state `held → occupied`. The table relationship itself is unchanged.
+>
+> **§12 Assignment-table rows:** confirmation must NOT create new `SeatingAssignmentTable` rows. Existing rows stay `released_at = NULL`; historical rows are never deleted; for a combined assignment, both table rows remain attached to the same assignment.
+>
+> **§13 Seating code:** confirmation must not generate a new code — it consumes the one already generated during allocation. Do NOT regenerate/replace/mutate/normalize into a different public format unless the API spec explicitly requires it.
+>
+> **§14 Idempotency/repeated confirmation:** must be safely repeatable without creating duplicate state — a second request with the same code, once already `SEATED`/`ACTIVE`, gets a conflict/already-confirmed response; must not create another assignment, change tables, create another assignment-table row, or generate another code. Follow the API's documented status/body for repeated confirmation.
+>
+> **§15 Staff authentication:** inspect the existing `StaffUser` model/spec. If authentication is already available, use it; if not, do NOT create a complete authentication system in this phase — implement the business operation behind the project's existing authentication boundary/placeholder as documented, and clearly report authentication status in the final report. Do not weaken the domain logic just because authentication is deferred.
+>
+> **§16 Service boundary:** a focused service if the architecture supports service objects (e.g. `Staff::ConfirmSeatingService`/`Seating::ConfirmService` — choose a name consistent with the repository), owning seating-code lookup, locking, state validation, and the atomic transition. Controller stays thin — no transaction/business logic directly in it.
+>
+> **§17 Model state transitions:** do not use unrestricted `update_column` or similar bypasses merely to force a transition — respect existing domain validation/state model; use explicit transition methods if they exist, or the smallest appropriate domain validation consistent with existing patterns if not. Do not redesign all state machines in this phase.
+>
+> **§18 API response:** follow `api-spec.md` exactly; communicate confirmed seating state without exposing internal lock/transaction/scoring/allocation internals. If the spec is missing a response shape, resolve from existing requirements or report the ambiguity rather than inventing one.
+>
+> **§19 Error cases (at minimum):** unknown code (documented not-found); code belongs to WAITING (cannot confirm); code belongs to already-SEATED (already confirmed/conflict); code belongs to LEFT (cannot confirm); code belongs to NO_SHOW (cannot confirm); assignment already ACTIVE (cannot confirm again); assignment RELEASED (cannot confirm). Use the existing API error conventions, don't invent a new taxonomy.
+>
+> **§20 Transaction rollback test:** a controlled failure after one state update but before the second — verify `QueueEntry` remains READY and `SeatingAssignment` remains PENDING, no partial transition (never READY+ACTIVE or SEATED+PENDING).
+>
+> **§21 Concurrency test:** real PostgreSQL, two real threads/connections, same `seating_code` — exactly one successful confirmation, exactly one conflict/already-confirmed result, final state SEATED/ACTIVE, no duplicate rows. Not mocked locks.
+>
+> **§22 Combined-table test:** a READY reservation backed by two tables, confirmed — one `QueueEntry`→SEATED, one `SeatingAssignment`→ACTIVE, two `SeatingAssignmentTable` rows remain with `released_at = NULL`, both still associated with the same assignment.
+>
+> **§23 Table state test:** before confirmation, `pending`/`released_at NULL`/derived `held`; after, `active`/`released_at NULL`/derived `occupied`. `Table` itself never modified.
+>
+> **§24 Guest status API integration:** after successful confirmation, `GET /guest/queue-entries/current` for that guest reflects `status = seated`, following the existing documented terminal-state shape; verify the read itself doesn't allocate another table, create another assignment, or modify unrelated entries.
+>
+> **§25 No allocation side effect:** staff confirmation must NOT call `Allocation::DecisionEngine`, `Allocation::Orchestrator`, or `Allocation::ReservationService` — confirmation does not allocate, it only confirms an already-allocated reservation. Release/allocation-after-release belongs to a later phase.
+>
+> **§26 Test suite (19 items, at minimum):** successful READY→SEATED; successful PENDING→ACTIVE; unknown code; WAITING/SEATED-again/LEFT/NO_SHOW/RELEASED-assignment/ACTIVE-assignment cannot be confirmed; repeated same-code request doesn't duplicate state; atomic transition; forced rollback; real concurrent race; combined 2-table confirmation; guest current-status shows SEATED after confirmation; no additional assignments/assignment-table rows/Table changes; existing 187+ suite stays green.
+>
+> **§27 API integration tests:** the actual HTTP endpoint against the real database — valid code, invalid code, invalid state, repeated confirmation, concurrent confirmation; verify HTTP status, response body, and database state. Not service-unit-tests-only.
+>
+> **§28 Manual verification (10 steps):** join a guest, let allocation produce READY, obtain the `seating_code` via guest status, call staff confirmation, verify `QueueEntry`=seated/`SeatingAssignment`=active/assignment-table rows intact/`released_at` NULL, call guest status again (=seated), repeat staff confirmation (no duplicate state, documented conflict), verify the 40-table seed baseline remains intact. Disposable data, cleaned up afterward.
+>
+> **§29 Documentation:** update `api-spec.md`, `01-requirements/traceability.md`, and (if needed) `functional-spec.md` only — document the endpoint, request/response, READY/PENDING preconditions, both transitions, concurrency behavior, repeated-confirmation behavior, authentication status. Do NOT document release as implemented; do NOT document staff authentication as implemented unless it actually is.
+>
+> **§30 AI working record:** update `agent-prompts.md`, `session-log.md`, `agent-decisions.md`; if a genuine AI mistake occurs, update `ai-corrections.md`. Do not fabricate corrections.
+>
+> **§31 Important correction rule — STOP and correct if Claude attempts to:** create a new `SeatingAssignment` during confirmation; create new `SeatingAssignmentTable` rows; allocate another table; change `Table.status`; generate a new `seating_code`; call `Allocation::Orchestrator`; add Sidekiq/Redis; silently build staff authentication.
+>
+> **§32 Git:** review `git status`/`git diff`/`git diff --stat` — verify changes limited to Phase 5B.6; run staff confirmation service tests, API integration tests, concurrency tests, guest status integration tests, full test suite; commit `feat: implement staff seating confirmation`; then `git status`/`git log --oneline --max-count=3`; working tree must be clean.
+>
+> **§33 Success criteria:** the 24-item checklist (service implemented; authoritative API contract followed; `seating_code` lookup; READY/PENDING validated; both transitions correct and atomic; PostgreSQL row locking used; concurrent race tested, exactly one succeeds; combined assignments confirmed correctly; existing assignment-table rows preserved, `released_at` stays `NULL`; `Table` records unmodified; no new assignment/seating_code/allocation; repeated confirmation handled correctly; guest current-status reflects SEATED; HTTP integration tests pass; full suite green; manual verification/documentation/AI-working-record/git checkpoint done).
+>
+> **§34 Strictly not implemented — confirm remain absent:** staff authentication system, staff registration, staff management, staff UI, release endpoint, guest leave endpoint, automatic allocation after release, Redis, Sidekiq, notifications, live updates, frontend, rate limiting, analytics, missed-opportunity tracking, fairness debt, predictive demand, runtime AI allocation.
+>
+> **§35 Final report format:** PASS/BLOCKED status; 1. Endpoint (method, route, request, success/error responses); 2. Service (class, public method, responsibilities); 3. State Transition; 4. Transaction (lookup/locks/validation/updates/commit-rollback); 5. Concurrency (real PostgreSQL results); 6. Tests (Total/Passed/Failed/Skipped + critical tests); 7. API Verification (real HTTP); 8. Guest Status Verification; 9. Documentation; 10. AI Working Record; 11. Git (commit/message/working tree); 12. Scope Verification (release, guest leave, staff authentication, notifications, Redis/Sidekiq, frontend, future functionality all confirmed deferred). End exactly with: "Phase 5B.6 is complete. Staff seating confirmation is implemented and verified. A READY reservation can be atomically confirmed by seating_code, transitioning QueueEntry from READY to SEATED and SeatingAssignment from PENDING to ACTIVE, with concurrency protection and no new allocation or table reservation. Release, guest leave, staff authentication, notifications, live updates, frontend, and other Phase 5B.7+ functionality remain deferred. No Phase 5B.7+ functionality was implemented in this phase." STOP.

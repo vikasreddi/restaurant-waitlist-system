@@ -86,13 +86,19 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Response 200 (success):** `{ entry_id, status: "seated", table_ids: [...] }`
 
-**Response `not_found` / `validation_error`:**
+**Response `not_found`:**
 - Unknown code.
-- Code belongs to an entry that isn't currently `ready` — already `seated` (code already used), already terminal (`left`/`no_show`), or still `waiting` (shouldn't be possible if codes are only ever generated on entering `ready`, but validated defensively).
+- Code belongs to an entry that is still `waiting` (should be unreachable in practice — a `seating_code` is only ever set on entering `ready`, so a `waiting` entry can never have one — validated defensively regardless).
 
 **Response `conflict`:**
-- The entry's reservation expired (DEC-015) in the narrow window between the code being shown and staff submitting it — the request lands after the lazy-expiration check has already converted the entry to `no_show`. The entry is **not** silently returned to `waiting`; staff see a clear "reservation expired" message, distinct from "unknown code."
-- The reservation was released by a concurrent operation for some other reason before this request's transaction committed — no partial allocation ever occurs (INV-005), and this endpoint never performs a *new* allocation attempt on conflict (unlike the old synchronous-allocation design) — it simply reports the conflict.
+- **Already confirmed:** the code belongs to an entry that is already `seated` (this exact code was already used) — a repeated confirmation, not a genuine error; distinct from "unknown code" precisely because the code *did* work, once.
+- **No longer valid:** the code belongs to an entry that is now `left` or `no_show`. Since a `seating_code` only ever exists on an entry that was `ready` at some point (never generated for, or cleared from, any other state), any `left`/`no_show` entry found this way is, by construction, always "a reservation that WAS valid and has since ended" (the guest left before staff could confirm, or — DEC-015 — the reservation expired in the narrow window between the code being shown and staff submitting it, converted to `no_show` by the lazy-expiration check). The entry is **not** silently returned to `waiting`; staff see a clear "no longer valid" message, distinct from "unknown code." (Corrected — CORR-008: an earlier version of this section put "already terminal (`left`/`no_show`)" under `not_found`/`validation_error` instead, directly contradicting this same section's own `conflict` bullet for the identical DEC-015 scenario.)
+- **Inconsistent/released assignment:** the entry is `ready` but its backing `SeatingAssignment` is not (or no longer) `pending` — released by a concurrent operation before this request's transaction committed. No partial allocation ever occurs (INV-005), and this endpoint never performs a *new* allocation attempt on conflict (unlike the old synchronous-allocation design) — it simply reports the conflict.
+
+**Implementation status (Phase 5B.6, `Staff::ConfirmSeatingService` / `Staff::SeatController`):**
+- Implemented now: `seating_code` lookup (via the existing partial unique index, never by `QueueEntry` id/phone/token/idempotency-key), row locking (`QueueEntry` then its own `SeatingAssignment`, a fixed single-path order), the atomic `ready`+`pending → seated`+`active` transition, all documented error cases above, verified under real PostgreSQL concurrency (exactly one of two simultaneous requests for the same code succeeds, the other observes `already_confirmed`).
+- **No staff authentication.** No session/login mechanism exists anywhere in this codebase yet (`StaffUser` has `has_secure_password` but no login endpoint — deferred every phase since 5B.2). This endpoint is therefore callable by anyone who can reach it, with no session check. This is a known, explicitly-documented gap for this phase (per this phase's own governing prompt §15: "do NOT create a complete authentication system... clearly report authentication status"), not a silent omission — staff login/session enforcement is deferred to whichever future phase builds `POST /staff/login`.
+- Never allocates, never selects/reserves a table, never creates a `SeatingAssignment`/`SeatingAssignmentTable` row, never generates a new `seating_code` — `Allocation::DecisionEngine`/`ReservationService`/`Orchestrator` are never called from this endpoint.
 
 ### `POST /staff/seating-assignments/release` — Release seating assignment
 
