@@ -84,6 +84,14 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Response 200:** list of `waiting` entries (`{ entry_id, group_size, joined_at, position, is_starvation_protected }`) and `ready` entries (`{ entry_id, group_size, ready_at, seating_code }`, no `position`) — staff can see which groups are already reserved and waiting on confirmation, distinct from those still in line. This read is a DEC-015 lazy-expiration checkpoint for any `ready` entries it touches.
 
+**Response shape (Phase 5B.8):** `{ waiting: [...], ready: [...] }` — the direct envelope for "list of waiting entries and ready entries" above; not otherwise specified elsewhere in this document. `waiting` is ordered chronologically (`joined_at` ascending, the same rank `position` reflects); `ready` is ordered by `ready_at` ascending (undefined by this section, a deterministic default).
+
+**Implementation status (Phase 5B.8, `Staff::QueueViewService` / `Staff::QueueController`):**
+- Implemented now: both lists above, read directly from PostgreSQL, terminal (`seated`/`left`/`no_show`) entries never included. `position` is the same chronological-rank computation as `GET /guest/queue-entries/current` (§ above) — not allocation priority, per this phase's own explicit "queue position is not allocation priority" instruction. `is_starvation_protected` is a two-line comparison against the existing `Allocation::Policy::STARVATION_THRESHOLD_SECONDS` constant (informational only, not a second implementation of the allocation algorithm).
+- **DEC-015 lazy expiration is now a shared module, `Allocation::LazyExpiration`**, used by this endpoint, `GET /guest/queue-entries/current`, and `POST /staff/seat` alike — extracted in this phase specifically because it became the third call site (each of the prior two explicitly flagged "a third call site would tip this toward extraction"). Behavior is unchanged from before the extraction.
+- **This read never triggers `Allocation::Orchestrator`, even when it expires an overdue `ready` entry.** Unlike `GET /guest/queue-entries/current`, where a lazy-expiration-triggered release is one of the approved allocation triggers, this phase's own governing prompt is unconditional here ("A Staff Queue read must not perform new allocation") — the same textual pattern `POST /staff/seat`'s own governing phase already established for the identical situation (see `agent-decisions.md` Session 18). The freed table simply stays free until a future join or guest status read picks it up.
+- Never creates a `QueueEntry`/`SeatingAssignment`/`SeatingAssignmentTable` row, never allocates, never releases a table other than via the DEC-015 expiration side effect above.
+
 ### `GET /staff/tables`
 
 **Auth:** staff session.

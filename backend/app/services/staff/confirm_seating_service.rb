@@ -9,13 +9,15 @@ module Staff
   # SeatingAssignmentTable row, and never generates a new seating_code.
   #
   # Per functional-spec.md §6a step 2, this is *also* one of DEC-015's lazy-
-  # expiration checkpoints (alongside Guest::CurrentQueueStatusService) — if
-  # the entry is still `ready` in the database but its reservation is
-  # actually overdue (nobody happened to read/write it since the deadline
-  # passed), this service must expire it here rather than blindly confirming
-  # a stale hold. The expiration itself, unlike a rejected confirmation
-  # attempt, is real and must commit — only the confirmation is refused. This
-  # phase's own governing prompt §25 explicitly forbids calling
+  # expiration checkpoints (alongside Guest::CurrentQueueStatusService and,
+  # as of Phase 5B.8, Staff::QueueViewService) — if the entry is still
+  # `ready` in the database but its reservation is actually overdue (nobody
+  # happened to read/write it since the deadline passed), this service must
+  # expire it here (via the shared Allocation::LazyExpiration module) rather
+  # than blindly confirming a stale hold. The expiration itself, unlike a
+  # rejected confirmation attempt, is real and must commit — only the
+  # confirmation is refused. This phase's own governing prompt §25 explicitly
+  # forbids calling
   # Allocation::Orchestrator anywhere in this service, even from this
   # expiration branch — so the table this frees is NOT synchronously
   # reallocated here; it stays free until the next trigger (a future guest
@@ -55,8 +57,7 @@ module Staff
 
         assignment = entry.current_seating_assignment&.tap(&:lock!)
 
-        if entry.status == "ready" && overdue?(assignment)
-          expire!(entry, assignment) # commits — this is real, not a rejected attempt
+        if Allocation::LazyExpiration.expire_if_overdue!(entry) # commits — this is real, not a rejected attempt
           outcome = :conflict
         else
           outcome = classify(entry, assignment)
@@ -73,20 +74,6 @@ module Staff
     end
 
     private
-
-    # Same predicate/effect as Guest::CurrentQueueStatusService#expire_if_
-    # overdue — duplicated rather than extracted into a shared helper for
-    # now (two call sites; CLAUDE.md's "don't add abstractions beyond what's
-    # needed" — a third site would tip this toward extraction).
-    def overdue?(assignment)
-      assignment.present? && assignment.expires_at.present? && Time.current >= assignment.expires_at
-    end
-
-    def expire!(entry, assignment)
-      assignment.seating_assignment_tables.where(released_at: nil).update_all(released_at: Time.current)
-      assignment.update!(status: "released")
-      entry.update!(status: "no_show", no_show_at: Time.current)
-    end
 
     # A `seating_code` only ever exists on an entry that was, at some point,
     # `ready` (functional-spec.md §1/§6 — generated exactly once, on

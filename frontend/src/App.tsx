@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:3000'
 
@@ -21,6 +21,26 @@ interface CurrentStatusResponse {
 
 interface StaffLoginResponse {
   token: string
+}
+
+interface StaffQueueWaitingEntry {
+  entry_id: number
+  group_size: number
+  joined_at: string
+  position: number
+  is_starvation_protected: boolean
+}
+
+interface StaffQueueReadyEntry {
+  entry_id: number
+  group_size: number
+  ready_at: string
+  seating_code: string
+}
+
+interface StaffQueueResponse {
+  waiting: StaffQueueWaitingEntry[]
+  ready: StaffQueueReadyEntry[]
 }
 
 interface ApiErrorBody {
@@ -219,8 +239,107 @@ function GuestJoin() {
 type StaffScreen =
   | { phase: 'form' }
   | { phase: 'loading' }
-  | { phase: 'authenticated'; email: string }
+  | { phase: 'authenticated'; email: string; token: string }
   | { phase: 'error'; message: string }
+
+type QueueScreen =
+  | { phase: 'loading' }
+  | { phase: 'loaded'; data: StaffQueueResponse }
+  | { phase: 'error'; message: string }
+
+// P0 REQ-STAFF-002 — a read-only view of GET /staff/queue, shown after Staff
+// Login. Fetches once on mount using the real session token (never a mocked
+// response). No Staff Table/Release/No-show UI, no live updates (P1) — a
+// manual "Refresh" re-fetch is the only way to see updated state, matching
+// this project's existing "no polling/streaming in P0" boundary.
+function StaffQueue({ token }: { token: string }) {
+  const [screen, setScreen] = useState<QueueScreen>({ phase: 'loading' })
+
+  const load = useCallback(async () => {
+    setScreen({ phase: 'loading' })
+    try {
+      const response = await fetch(`${BACKEND_URL}/staff/queue`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const body = await parseJson(response)
+
+      if (!response.ok) {
+        const message = (body as ApiErrorBody | null)?.error?.message
+        setScreen({ phase: 'error', message: message ?? `Could not load queue (HTTP ${response.status}).` })
+        return
+      }
+
+      setScreen({ phase: 'loaded', data: body as StaffQueueResponse })
+    } catch {
+      setScreen({ phase: 'error', message: 'Could not reach the server. Check your connection and try again.' })
+    }
+  }, [token])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  if (screen.phase === 'loading') {
+    return <p>Loading queue…</p>
+  }
+
+  if (screen.phase === 'error') {
+    return (
+      <>
+        <p role="alert" style={{ color: '#b00020' }}>
+          {screen.message}
+        </p>
+        <button type="button" onClick={load}>
+          Retry
+        </button>
+      </>
+    )
+  }
+
+  const { waiting, ready } = screen.data
+  const isEmpty = waiting.length === 0 && ready.length === 0
+
+  return (
+    <div>
+      <button type="button" onClick={load} style={{ marginBottom: '1rem' }}>
+        Refresh
+      </button>
+
+      {isEmpty && <p>The queue is empty.</p>}
+
+      {!isEmpty && (
+        <>
+          <h2>Waiting</h2>
+          {waiting.length === 0 ? (
+            <p>No groups waiting.</p>
+          ) : (
+            <ul>
+              {waiting.map((entry) => (
+                <li key={entry.entry_id}>
+                  #{entry.position} — Group of {entry.group_size}
+                  {entry.is_starvation_protected ? ' (priority)' : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <h2>Ready</h2>
+          {ready.length === 0 ? (
+            <p>No groups ready.</p>
+          ) : (
+            <ul>
+              {ready.map((entry) => (
+                <li key={entry.entry_id}>
+                  Group of {entry.group_size} — code {entry.seating_code}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
 
 // P0 login stub only (REQ-STAFF-001) — no staff dashboard exists to unlock,
 // so "authenticated" just confirms the real token was actually issued by the
@@ -256,7 +375,7 @@ function StaffLogin() {
         return
       }
 
-      setScreen({ phase: 'authenticated', email })
+      setScreen({ phase: 'authenticated', email, token })
     } catch {
       setScreen({ phase: 'error', message: 'Could not reach the server. Check your connection and try again.' })
     }
@@ -269,6 +388,8 @@ function StaffLogin() {
         <button type="button" onClick={() => setScreen({ phase: 'form' })}>
           Log Out
         </button>
+        <h2 style={{ marginTop: '1.5rem' }}>Staff Queue</h2>
+        <StaffQueue token={screen.token} />
       </div>
     )
   }
