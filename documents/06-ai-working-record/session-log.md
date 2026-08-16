@@ -457,3 +457,36 @@ Then resume Prompt 5 from §5 (Backend Bootstrap) onward.
 **Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
 
 **Next session (not yet run):** Phase 5B.5.2 — implementing the allocation service against this now-locked algorithm specification, per whatever the candidate authorizes next.
+
+---
+
+## Session 15 — 2026-08-16 — Phase 5B.5.2: pure allocation decision engine
+
+**Environment:** Claude Code CLI, same repository, continuing directly from Session 14 in the same conversation.
+
+**Phase 5B.5.2 — Pure Allocation Decision Engine.** The candidate's governing prompt (`Phase_5B_5_2_Pure_Allocation_Decision_Engine_Prompt.md`) was delivered complete in one piece. First allocation application code — deliberately scoped to the deterministic decision only: no `SeatingAssignment`/`SeatingAssignmentTable` creation, no table locking, no `READY` transition, no `seating_code`, no persistence of any kind.
+
+**Implementation (`backend/app/services/allocation/`, all inside the running `backend` container):**
+- `Allocation::TableConfiguration` — immutable value object (`table_ids`, `capacity`, `table_count`); `.single(table)` and `.combined(table_a, table_b)` constructors, the latter always sorting `table_ids` ascending so `[3,4]` and `[4,3]` are never two representations of the same pair.
+- `Allocation::Candidate` — one scored `(entry, configuration)` pairing.
+- `Allocation::Policy` — `FIT_WEIGHT`/`SCARCITY_WEIGHT`/`AGING_WEIGHT`/`STARVATION_THRESHOLD_SECONDS`/`MAX_AGING_WINDOW_SECONDS`, `ENV`-tunable, mirroring the existing `SeatingAssignment::READY_TIMEOUT` idiom from Phase 5B.2 rather than introducing a new configuration mechanism.
+- `Allocation::DecisionEngine` — the pure core, `allocation-algorithm.md` §3–§14 implemented verbatim: hard compatibility gate, exact `fit_score`/`scarcity_score`/`aging_score` formulas, derived (never stored) starvation protection with a categorical pool-override (not an additive bonus — implemented as literally excluding non-protected candidates from the ranked pool whenever any protected candidate exists), the exact `total_score` weighted sum, global candidate-grid generation (not first-match), and the locked 4-level tie-break hierarchy. `now` is injected (`.decide(waiting_entries:, configurations:, now:)`), never read from wall-clock time internally. Filters its own input to `status == "waiting"` defensively, per §5.
+- `Allocation::ConfigurationGenerator` — the one piece that reads the database (`Table`/`TableAdjacency`), deliberately kept separate from the pure engine per the phase's own "pure decision ≠ database allocation transaction" boundary (§28). Relies on `TableAdjacency`'s existing canonical-pair storage (Phase 5B.2) to get deduplicated, correctly-ordered pairs for free — no new dedup logic needed.
+
+**Tests: 50 new, across 4 files** (`decision_engine_test.rb`, `table_configuration_test.rb`, `configuration_generator_test.rb`, `allocation_algorithm_examples_test.rb`). `decision_engine_test.rb` deliberately touches the database nowhere — every "entry" is a plain in-memory `FakeEntry` struct, not a persisted `QueueEntry`, directly demonstrating the "straightforward to unit test without a database" requirement (§24/§26) rather than just asserting it. Covers all 16 named tests from §25 plus the §26 property/invariant list (bounded scores, non-waiting entries ignored, single winner, no DB side effects — verified by asserting `QueueEntry.count` is unchanged around a `decide` call — and same-input-same-`now`-determinism, including one test that reverses input order and confirms the same winner). `allocation_algorithm_examples_test.rb` translates 7 of `allocation-algorithm.md`'s 12 worked examples into executable tests (Examples 3, 4, 6, 7, 9/16, 10, 11, 12) directly against the real engine.
+
+**No genuine AI mistake or specification contradiction occurred this session** — all 50 new tests passed on first run (155 total, 0 failures), including every translated worked example, so no `ai-corrections.md` entry was added and no `BLOCKED` report was needed. Recorded here explicitly per the prompt's own §32/§33 instruction not to fabricate a correction or a contradiction that didn't happen.
+
+**Verification actually performed, not claimed without running it:**
+- Full suite: 155 runs, 282 assertions, 0 failures, 0 errors, 0 skips (105 pre-existing + 50 new).
+- Confirmed via `git status` before any documentation edits that only `backend/app/services/allocation/` and `backend/test/services/allocation/` were touched — no migrations, no `routes.rb`/controller changes, no API behavior change, exactly matching the phase's strict boundary.
+
+**Documentation updated:** `documents/05-specifications/allocation-algorithm.md` — a new, clearly-labeled "Implementation status (Phase 5B.5.2)" note added (§25a) listing where each piece of the specification now lives in code and what remains deferred (the `run_allocation_pass` loop, the transactional `allocate` step, and trigger wiring) — the locked formulas themselves (§3–§22) were **not** touched, per the prompt's own §31 instruction.
+
+**AI working record updated this session:** `agent-prompts.md` (Prompt 17), `session-log.md` (this entry), `agent-decisions.md` (Session 15 — the `Policy` module's plain-integer-vs-`Duration` choice, the decision to defensively filter non-waiting entries inside the engine itself rather than trust the caller, the decision to duplicate a tiny `FakeEntry` struct across two test files rather than share it across a fragile load-order dependency).
+
+**Scope boundary honored:** no `SeatingAssignment`/`SeatingAssignmentTable` persistence, no `SELECT FOR UPDATE`, no table reservation, no `QueueEntry → READY` transition, no `seating_code` generation, no allocation-trigger loop, no release/no-show/leave integration, no staff confirmation, no Redis/Sidekiq/notifications/live updates/frontend/staff APIs, no missed-opportunity tracking, no fairness debt, no predictive demand, no runtime AI allocation. Only `backend/app/services/allocation/`, `backend/test/services/allocation/`, and `documents/05-specifications/allocation-algorithm.md` were touched.
+
+**Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
+
+**Next session (not yet run):** Phase 5B.5.3 or equivalent — the transactional allocation phase (table locking, `SeatingAssignment`/`SeatingAssignmentTable` creation, `READY` transition, `seating_code` generation, and wiring the engine to actual triggers), per whatever the candidate authorizes next.

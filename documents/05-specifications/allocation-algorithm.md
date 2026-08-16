@@ -386,6 +386,19 @@ While producing this document, the following contradiction was found and correct
 - The starvation-protected-candidates ordering (§9) is this document's own reasonable completion of a genuine gap in the approved policy (which specifies protection *against non-protected competitors*, not protected-vs-protected ordering) — not itself an approved product decision; flagged here so a human reviewer can confirm or override it before Phase 5B.5.2 implements it.
 - `run_allocation_pass`'s repeat-until-exhausted loop (§12) is synchronous and re-derives the full grid from scratch on every iteration for simplicity and correctness under concurrency (§20) — acceptable at the stated MVP scale (~40 tables, hundreds of waiting groups), not necessarily at a much larger scale, which is out of scope for this assignment.
 
+## 25a. Implementation status (Phase 5B.5.2)
+
+The pure decision-making portion of this specification (§3–§14) is implemented, verbatim, in `backend/app/services/allocation/`:
+- `Allocation::TableConfiguration` — the value object from §4.
+- `Allocation::Candidate` — one scored `(entry, configuration)` pairing.
+- `Allocation::Policy` — the §19 configuration values, `ENV`-tunable, mirroring the existing `SeatingAssignment::READY_TIMEOUT` idiom.
+- `Allocation::DecisionEngine` — §3–§14 (compatibility, fit, scarcity, aging, starvation, `total_score`, global candidate generation, tie-breaking). Pure: no database reads or writes, `now` injected, unit-tested without a database (`backend/test/services/allocation/decision_engine_test.rb`).
+- `Allocation::ConfigurationGenerator` — the one DB-reading piece (§4's `generate_available_configurations`, kept deliberately separate from the pure engine per this phase's own architecture boundary).
+
+**Not yet implemented (deferred to the next phase):** §12's `run_allocation_pass` repeat-until-exhausted loop, the transactional `allocate` step (§18, table locking, `SeatingAssignment`/`SeatingAssignmentTable` creation, `seating_code` generation, the `waiting → ready` transition), and wiring this engine to the actual allocation triggers (join/release/no-show/leave). `Allocation::DecisionEngine#decide` currently returns a single winner-or-none for one already-assembled candidate set — it does not yet loop, persist, or get called from anywhere in the request path.
+
+No contradiction was found between this specification and its implementation — all 12 worked examples (§21) translate directly into passing tests with no expected-outcome changes needed.
+
 ## 25. Future evolution
 
 See §16's "Explicitly future" list and the existing `07-future-evolution/missed-opportunities.md` and `fairness-debt.md` — nothing in this document expands or contracts that already-approved boundary (DEC-008).

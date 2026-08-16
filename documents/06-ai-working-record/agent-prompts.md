@@ -766,6 +766,7 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 - Prompt 14 (below) authorized the first real business API — guest join with idempotency — supplied complete, in one piece, as `Phase_5B_3_Guest_Join_API_Prompt(1).md`, no truncation this time.
 - Prompt 15 (below) authorized the next vertical slice — guest current-visit status and an informational (deliberately non-final) queue position — supplied complete as `Phase_5B_4_Guest_Current_Queue_Status_Position_Prompt(1).md`.
 - Prompt 16 (below) authorized an analysis/specification-only phase — locking the allocation algorithm's exact formulas, eligibility rules, and worked examples before any allocation code is written — supplied complete as `Phase_5B_5_1_Allocation_Algorithm_Reconciliation_Prompt(1).md`. No application code was authorized or written in this phase.
+- Prompt 17 (below) authorized the first allocation application code — a pure, side-effect-free decision engine implementing the now-locked algorithm, explicitly stopping short of any database mutation, table locking, or `SeatingAssignment` creation — supplied complete as `Phase_5B_5_2_Pure_Allocation_Decision_Engine_Prompt.md`.
 
 ---
 
@@ -990,3 +991,85 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 > **§32 Git:** review `git status`/`git diff`/`git diff --stat` — there must be NO application-code changes; create a documentation-only checkpoint `docs: lock allocation algorithm specification`; then verify `git status` and `git log --oneline --max-count=3`; working tree should be clean.
 >
 > **§33 Final report format:** PASS/BLOCKED status; 1. Final Algorithm; 2. Formula; 3. Hard Eligibility; 4. Scarcity; 5. Aging; 6. Starvation; 7. Maximum Safeguard; 8. Missed Compatible Opportunities; 9. Tie-Breaking; 10. Global Allocation; 11. Combined Tables; 12. Worked Examples (summarize ≥12); 13. MVP vs. Future (implemented-next-phase / future fairness / future AI assistance, clearly separated); 14. AI Role; 15. Concurrency; 16. Documents (every updated/created document); 17. AI Working Record; 18. Git (commit/message/working tree); 19. Scope Verification (explicit confirmation no allocation code, no table reservations, no Redis, no Sidekiq, no staff API, no frontend changes were implemented). End exactly with: "Phase 5B.5.1 is complete. The allocation algorithm has been reconciled, made deterministic and explainable, and documented with explicit formulas, eligibility rules, starvation protection, scarcity, tie-breaking, concurrency requirements, and worked examples. No allocation application code was implemented in this phase. Phase 5B.5.2 implementation is now the next authorized task." STOP.
+
+---
+
+## Prompt 17 — Phase 5B.5.2: Pure Allocation Decision Engine
+
+**Source:** `Phase_5B_5_2_Pure_Allocation_Decision_Engine_Prompt.md` (candidate-authored, read from `~/Downloads/`), delivered complete in a single message.
+
+**Session context:** the first allocation application code. Implements only the deterministic decision-making portion of allocation — "given the current WAITING entries and the currently available table configurations, which group/configuration should be selected next?" — without persisting anything. `documents/05-specifications/allocation-algorithm.md` (locked, Phase 5B.5.1) is the binding source of truth; this phase implements it, does not revise it.
+
+**Full text (condensed; all 37 numbered sections' substantive content preserved):**
+
+> **§1 Very important phase boundary — MUST NOT implement:** `SeatingAssignment`/`SeatingAssignmentTable` creation, table locking, `SELECT FOR UPDATE`, database reservation, `QueueEntry → READY` transition, `seating_code` generation, staff confirmation, Redis, Sidekiq, background jobs, notifications, frontend, staff APIs. Output is a pure decision — `waiting entries + available configurations → AllocationDecisionEngine → selected candidate OR no allocation` — the engine must not modify the database.
+>
+> **§2 Read first:** `CLAUDE.md`, `allocation-algorithm.md`, `allocation-spec.md`, `seating-allocation-policy.md`, `starvation-policy.md`, `functional-spec.md`, `api-spec.md`, `domain-model.md`, `data-model.md`, `test-strategy.md`; inspect `backend/app/models/`, `app/services/`, `test/`, `db/schema.rb`. Follow the existing Rails architecture — do not invent a second service architecture.
+>
+> **§3 Source of truth:** the final formulas in `allocation-algorithm.md` are authoritative — do not change the algorithm while implementing it. If a genuine contradiction is discovered between implementation and specification: stop implementing that part, explain the contradiction, do not silently change the algorithm, record it for human review. Do not "improve" the algorithm during implementation.
+>
+> **§4 Pure function requirement:** input state → decision → no side effects. The engine must not create/update/delete records, reserve tables, or mutate `QueueEntry`/`Table` state. Same logical input state must produce the same decision. `now` may be passed in explicitly for deterministic tests — prefer dependency injection over calling `Time.current` deep inside scoring methods.
+>
+> **§5 Inputs — waiting entries:** at minimum `id`, `group_size`, `joined_at`, `status`; only `WAITING` entries are eligible — do NOT include `READY`/`SEATED`/`LEFT`/`NO_SHOW` in the candidate pool, and the engine must not change their state.
+>
+> **§6 Table configurations:** single table or a valid adjacent pair only. Current MVP supports 1 table OR 2 adjacent tables — never 3+ or arbitrary combinations.
+>
+> **§7 Configuration representation:** a small internal immutable value object (`TableConfiguration`: `table_ids`, `capacity`, `table_count`) — keep it simple, don't couple the pure scoring engine to ActiveRecord persistence more than necessary.
+>
+> **§8 Configuration generation:** if included in this phase, must be deterministic — every free table, plus every valid free adjacency pair, no duplicate/reverse pairs (canonical ordering preserved, e.g. `[3,4]` not also `[4,3]`).
+>
+> **§9 Hard compatibility gate:** for every `waiting entry × configuration` candidate, `configuration.capacity >= entry.group_size` must hold, or the candidate must not be scored at all — no amount of waiting/scarcity/starvation/AI/weighting can make an incompatible configuration eligible.
+>
+> **§10 Fit score:** exactly `group_size / configuration.capacity` — do not invent another formula, reverse the ratio, or add arbitrary bonuses.
+>
+> **§11 Scarcity score:** exactly `1 / count(currently-compatible-available-configurations)`, recalculated from the current candidate/configuration set for each waiting entry — never a static assumption like "6-seat tables are always scarce."
+>
+> **§12 Aging score:** exactly `min(waiting_seconds / MAX_AGING_WINDOW_SECONDS, 1.0)` where `waiting_seconds = now - joined_at`; the spec's default `MAX_AGING_WINDOW_SECONDS` is the 20-minute starvation threshold — don't hardcode `1200`, use the configured value. `0.0` at join, linear growth, capped at `1.0`.
+>
+> **§13 Starvation protection:** derived, not stored — `protected = waiting_seconds >= STARVATION_THRESHOLD_SECONDS` (default 20 minutes). Do NOT add a starvation column, schedule an update, persist a flag, or create a background job.
+>
+> **§14 Starvation pool override (critical):** after hard compatibility filtering, if ANY eligible candidate is starvation-protected, `candidates_for_ranking` becomes ONLY the protected candidates; otherwise it's all eligible candidates. A protected candidate can exclude all non-protected candidates from the decision. This is NOT an additive bonus (`total_score += starvation_bonus` would contradict the locked algorithm) — do not implement it that way.
+>
+> **§15 Total score:** exactly `0.4 * fit_score + 0.3 * scarcity_score + 0.3 * aging_score`, weights as centralized configuration (`FIT_WEIGHT`/`SCARCITY_WEIGHT`/`AGING_WEIGHT`), not scattered magic numbers. Result bounded `0 <= total_score <= 1` given correctly normalized components.
+>
+> **§16 Maximum safeguard:** aging capped at `1.0` therefore `total_score <= 1.0` — do not let waiting time increase the score indefinitely, do not add an unbounded waiting-time multiplier.
+>
+> **§17 Global candidate generation:** do NOT implement first-entry→first-table→allocate. Instead generate `waiting entries × available configurations`, hard-compatibility-filter, score, starvation-pool-filter, deterministically rank, choose ONE winner — a global decision, not first-match.
+>
+> **§18 Tie-breaking:** the locked ordering — (1) higher `total_score`, (2) fewer tables consumed, (3) earlier `joined_at`, (4) lower `QueueEntry` id. No randomness, no phone number, no token, no table name, no database insertion order. Same state must always produce the same winner.
+>
+> **§19 Combined tables:** `capacity = table_1.capacity + table_2.capacity`, `table_count = 2`, exact same scoring formulas as single tables — do not hardcode "single always wins"; a single table wins only via a higher score or the fewer-tables tie-break on an exact tie.
+>
+> **§20/§21 Required worked examples:** a starvation example (6-seat table available, 2-person 2-min-waiting group vs. 6-person 21-min-waiting starvation-protected group — B must win even though A has the better fit score, covered by a test) and a scarcity example (2-seat/4-seat/6-seat all available; a 2-person group has 3 compatible configurations → scarcity 1/3, a 6-person group has 1 → scarcity 1; calculated independently per entry, never one global number).
+>
+> **§22 Missed opportunities:** do NOT implement tracking in this phase — no counter, no fairness debt, no history-based score modification, no new DB field. The engine simply makes the current deterministic decision.
+>
+> **§23 Multi-pass allocation:** the eventual process repeats choose-winner → transaction → refresh state → fresh grid → choose next winner, but THIS PHASE ONLY IMPLEMENTS ONE DECISION — return one winner or no winner; do not implement the repeat/transaction loop yet (that belongs to the transactional allocation phase).
+>
+> **§24 No database side effects:** must not call `save!`/`update!`/`create!`/`destroy!`/`delete!`/`touch!` inside the decision engine. May read data if necessary, but prefer passing plain/value objects in — the engine should be straightforward to unit test without a database when possible.
+>
+> **§25 Testing strategy (16 named tests):** exact fit; larger compatible table; incompatible configuration excluded; scarcity (1/3 and 1/1 cases); aging (0 at join, 0.5 at half window, 1 at/after max); starvation threshold (before/at); starvation pool override; exact score-formula verification; deterministic tie-breaks (fewer tables / earlier joined_at / lower id); single-vs-combined using summed capacity; no compatible candidate → no winner; global-grid winner (not first-match); the starvation scenario from §20.
+>
+> **§26 Property/invariant tests, where practical:** incompatible candidates never returned; score between 0 and 1; aging never exceeds 1; scarcity between 0 and 1; non-WAITING entries ignored; the engine never returns more than one winner; no database side effects; same input + same `now` = same decision.
+>
+> **§27 Test the actual spec examples:** translate the most important of `allocation-algorithm.md`'s 12 worked examples into executable tests. Do not alter expected outcomes merely to make tests pass — if a worked example conflicts with the implementation, stop and report the contradiction.
+>
+> **§28 Architecture:** a clear application service/value-object structure appropriate to the existing Rails codebase (a reasonable shape: `AllocationDecisionEngine → Candidate → TableConfiguration`) — inspect the existing architecture first, don't create unnecessary layers. The important boundary: pure decision ≠ database allocation transaction.
+>
+> **§29 Time handling:** inject `now` (e.g. `engine.decide(waiting_entries:, configurations:, now:)`) for exact deterministic tests — never real wall-clock time inside unit tests.
+>
+> **§30 Configuration:** centralized configuration for `FIT_WEIGHT`/`SCARCITY_WEIGHT`/`AGING_WEIGHT`/`STARVATION_THRESHOLD_SECONDS`/`MAX_AGING_WINDOW_SECONDS`, defaults `0.4`/`0.3`/`0.3`/20 min/20 min. Use the existing project configuration mechanism if one exists; don't introduce a heavyweight framework.
+>
+> **§31 Documentation:** update the relevant specification only if the actual implementation requires clarification — do NOT change the locked formulas; document the implementation location (e.g. an implementation-status note in `allocation-algorithm.md`); do not rewrite the algorithm merely to match code style.
+>
+> **§32 AI working record:** update `agent-prompts.md`, `session-log.md`, `agent-decisions.md` with this prompt, implementation decisions, test results, any specification issues, genuine AI corrections; if a genuine mistake occurs, also update `ai-corrections.md`. Do not fabricate mistakes.
+>
+> **§33 Important correction rule:** if implementing would require changing the approved algorithm — STOP, do NOT auto-"fix" the specification, report the specification rule / implementation conflict / proposed change / reason, and wait for human approval.
+>
+> **§34 Git:** review `git status`/`git diff`/`git diff --stat` — verify only Phase 5B.5.2 files changed (no migrations, no API behavior, no table reservations, no Redis, no Sidekiq, no frontend, no staff API); run the relevant tests and full test suite; commit `feat: implement allocation decision engine`; then `git status`/`git log --oneline --max-count=3`; working tree should be clean.
+>
+> **§35 Success criteria:** the 26-item checklist (pure engine implemented; WAITING-only pool; single/combined configurations supported, never 3+; hard compatibility gate; exact fit/scarcity/aging formulas; derived starvation with pool override; exact weighted score bounded at 1; deterministic tie-breaking; global candidate grid; one-winner-or-none result; injected deterministic time; no DB mutation/locking/`SeatingAssignment`/READY-transition/`seating_code`; unit tests for all critical rules; worked-example tests; full existing suite passes; documentation/AI-working-record/git checkpoint done).
+>
+> **§36 Strictly not implemented — confirm remain absent:** `SeatingAssignment`/`SeatingAssignmentTable` persistence, `SELECT FOR UPDATE`, table reservation, `QueueEntry → READY`, `seating_code` generation, the allocation-trigger loop, release/no-show/leave integration, staff confirmation, Redis, Sidekiq, notifications, live updates, frontend, staff APIs, missed-opportunity tracking, fairness debt, predictive demand, runtime AI allocation.
+>
+> **§37 Final report format:** PASS/BLOCKED status; 1. Implementation (engine class/service, value objects, configuration, candidate-generation location); 2. Algorithm (compatibility/fit/scarcity/aging/starvation/total-score/tie-breaking summary); 3. Tests (Total/Passed/Failed/Skipped + most important tests); 4. Worked Examples (which spec examples were converted to tests); 5. Determinism (how injected time and deterministic tie-breaking were verified); 6. Side Effects (explicit confirmation: no DB writes, no table locks, no assignments, no READY transitions); 7. Documentation; 8. AI Working Record; 9. Git (commit/message/working tree); 10. Scope Verification (explicit confirmation transactional allocation and reservation are NOT implemented yet). End exactly with: "Phase 5B.5.2 is complete. The pure deterministic allocation decision engine is implemented and tested against the locked allocation algorithm. It selects at most one winning group/configuration without mutating the database. Transactional table reservation, SeatingAssignment creation, READY transition, and allocation-trigger integration remain deferred to the next phase. No Phase 5B.5.3+ functionality was implemented in this phase." STOP.
