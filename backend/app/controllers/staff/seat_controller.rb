@@ -3,11 +3,11 @@ module Staff
   # state-transition logic lives in Staff::ConfirmSeatingService
   # (api-spec.md "POST /staff/seat").
   #
-  # No staff authentication: no session/login mechanism exists anywhere in
-  # this codebase yet (StaffUser has no login endpoint, deferred every phase
-  # since 5B.2) — this is a known, explicitly-documented gap for this phase,
-  # not a silently-introduced one. See CLAUDE.md/session-log.md Session 18.
-  class SeatController < ApplicationController
+  # Now requires staff authentication (Staff::BaseController's before_action)
+  # — the gap noted in Session 18 ("deferred to whichever future phase
+  # builds POST /staff/login") is closed by this phase, which is that phase.
+  # See 06-ai-working-record/agent-decisions.md Session 21 for the reasoning.
+  class SeatController < Staff::BaseController
     def create
       result = ConfirmSeatingService.call(seating_code: params[:seating_code])
 

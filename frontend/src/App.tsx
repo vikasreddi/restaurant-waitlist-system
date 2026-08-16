@@ -19,11 +19,15 @@ interface CurrentStatusResponse {
   seating_code?: string
 }
 
+interface StaffLoginResponse {
+  token: string
+}
+
 interface ApiErrorBody {
   error?: { type: string; message: string }
 }
 
-type Screen =
+type GuestScreen =
   | { phase: 'form' }
   | { phase: 'loading' }
   | { phase: 'result'; status: CurrentStatusResponse }
@@ -37,10 +41,10 @@ async function parseJson(response: Response): Promise<unknown> {
   }
 }
 
-function App() {
+function GuestJoin() {
   const [groupSize, setGroupSize] = useState(2)
   const [phoneNumber, setPhoneNumber] = useState('')
-  const [screen, setScreen] = useState<Screen>({ phase: 'form' })
+  const [screen, setScreen] = useState<GuestScreen>({ phase: 'form' })
   const [activeVisitToken, setActiveVisitToken] = useState<string | null>(null)
   const [isLeaving, setIsLeaving] = useState(false)
   const [leaveError, setLeaveError] = useState<string | null>(null)
@@ -129,9 +133,7 @@ function App() {
   }
 
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem' }}>
-      <h1>Restaurant Waitlist</h1>
-
+    <>
       {screen.phase !== 'result' && (
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: '1rem' }}>
@@ -210,6 +212,127 @@ function App() {
           </div>
         </div>
       )}
+    </>
+  )
+}
+
+type StaffScreen =
+  | { phase: 'form' }
+  | { phase: 'loading' }
+  | { phase: 'authenticated'; email: string }
+  | { phase: 'error'; message: string }
+
+// P0 login stub only (REQ-STAFF-001) — no staff dashboard exists to unlock,
+// so "authenticated" just confirms the real token was actually issued by the
+// real backend. Never fakes a successful login client-side.
+function StaffLogin() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [screen, setScreen] = useState<StaffScreen>({ phase: 'form' })
+
+  const isLoading = screen.phase === 'loading'
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    setScreen({ phase: 'loading' })
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/staff/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+      const body = await parseJson(response)
+
+      if (!response.ok) {
+        const message = (body as ApiErrorBody | null)?.error?.message
+        setScreen({ phase: 'error', message: message ?? `Login failed (HTTP ${response.status}).` })
+        return
+      }
+
+      const { token } = body as StaffLoginResponse
+      if (!token) {
+        setScreen({ phase: 'error', message: 'Login succeeded but no session token was returned.' })
+        return
+      }
+
+      setScreen({ phase: 'authenticated', email })
+    } catch {
+      setScreen({ phase: 'error', message: 'Could not reach the server. Check your connection and try again.' })
+    }
+  }
+
+  if (screen.phase === 'authenticated') {
+    return (
+      <div>
+        <p>Logged in as {screen.email}.</p>
+        <button type="button" onClick={() => setScreen({ phase: 'form' })}>
+          Log Out
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <form onSubmit={handleSubmit}>
+        <div style={{ marginBottom: '1rem' }}>
+          <label htmlFor="staff-email">Email</label>
+          <br />
+          <input
+            id="staff-email"
+            type="email"
+            required
+            value={email}
+            disabled={isLoading}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </div>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <label htmlFor="staff-password">Password</label>
+          <br />
+          <input
+            id="staff-password"
+            type="password"
+            required
+            value={password}
+            disabled={isLoading}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </div>
+
+        <button type="submit" disabled={isLoading}>
+          {isLoading ? 'Logging in…' : 'Login'}
+        </button>
+      </form>
+
+      {screen.phase === 'error' && (
+        <p role="alert" style={{ color: '#b00020' }}>
+          {screen.message}
+        </p>
+      )}
+    </>
+  )
+}
+
+function App() {
+  const [view, setView] = useState<'guest' | 'staff'>('guest')
+
+  return (
+    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem' }}>
+      <h1>Restaurant Waitlist</h1>
+
+      <nav style={{ marginBottom: '1.5rem' }}>
+        <button type="button" onClick={() => setView('guest')} disabled={view === 'guest'}>
+          Guest
+        </button>{' '}
+        <button type="button" onClick={() => setView('staff')} disabled={view === 'staff'}>
+          Staff Login
+        </button>
+      </nav>
+
+      {view === 'guest' ? <GuestJoin /> : <StaffLogin />}
     </main>
   )
 }

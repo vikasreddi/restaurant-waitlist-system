@@ -11,8 +11,40 @@ module Staff
       [entry, assignment, table]
     end
 
-    def post_seat(code)
-      post "/staff/seat", params: { seating_code: code }, as: :json
+    def staff_token
+      staff = StaffUser.find_by(email: "seat-test-staff@example.com") ||
+        StaffUser.create!(email: "seat-test-staff@example.com", password: "irrelevant-test-password")
+      Staff::SessionToken.generate(staff)
+    end
+
+    def post_seat(code, authenticated: true)
+      headers = authenticated ? { "Authorization" => "Bearer #{staff_token}" } : {}
+      post "/staff/seat", params: { seating_code: code }, headers: headers, as: :json
+    end
+
+    test "an unauthenticated request is rejected with 401, and the entry is left untouched" do
+      entry, = build_ready_entry(code: "AUTH001")
+
+      post_seat("AUTH001", authenticated: false)
+
+      assert_response :unauthorized
+      assert_equal "ready", entry.reload.status
+    end
+
+    test "an invalid/garbage bearer token is rejected with 401" do
+      build_ready_entry(code: "AUTH002")
+
+      post "/staff/seat", params: { seating_code: "AUTH002" }, headers: { "Authorization" => "Bearer not-a-real-token" }, as: :json
+
+      assert_response :unauthorized
+    end
+
+    test "a guest's own active_visit_token cannot authenticate as staff" do
+      entry, = build_ready_entry(code: "AUTH003")
+
+      post "/staff/seat", params: { seating_code: "AUTH003" }, headers: { "Authorization" => "Bearer #{entry.active_visit_token}" }, as: :json
+
+      assert_response :unauthorized
     end
 
     test "a valid seating code returns 200 with entry_id, status seated, and table_ids" do

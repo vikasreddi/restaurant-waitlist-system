@@ -43,3 +43,13 @@ adjacency_pairs.each do |name_a, name_b|
 end
 
 puts "Seeded #{TableAdjacency.count} adjacency pairs." unless Rails.env.test?
+
+# One demo StaffUser (P0 login stub, REQ-STAFF-001) — none existed before
+# this phase. Obviously-fake, non-sensitive local-dev-only credentials, the
+# same category as this project's already-committed database.yml dev
+# defaults (postgres/postgres) — not a real credential for a real system.
+# Documented explicitly here rather than left for someone to guess.
+StaffUser.find_or_create_by!(email: "staff@example.com") do |staff|
+  staff.password = "demo-staff-password"
+end
+puts "Seeded demo StaffUser (staff@example.com)." unless Rails.env.test?

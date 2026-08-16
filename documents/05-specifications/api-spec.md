@@ -67,9 +67,16 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Request:** `{ email, password }`
 
-**Response 200:** session established (mechanism TBD, e.g., cookie or bearer token — stub-strength per REQ-STAFF-001).
+**Response 200:** `{ token }` — session established as a bearer token, fixed as of this phase (was "mechanism TBD, e.g., cookie or bearer token"). Present it on subsequent staff requests as `Authorization: Bearer <token>` — the same transport shape already established for guests, but a cryptographically distinct mechanism (see "Implementation status" below), never interchangeable with a guest `active_visit_token`.
 
-**Response 401:** generic authentication failure, no user enumeration.
+**Response 401:** generic authentication failure (`{ error: { type: "unauthorized", message } }`), no user enumeration — an unknown email and a known email with the wrong password are indistinguishable to the caller.
+
+**Implementation status (Phase 5B.7 — P0 completion mode, `Staff::LoginService` / `Staff::LoginController` / `Staff::SessionToken`):**
+- Session mechanism resolved: a signed (via Rails' built-in `ActiveSupport::MessageVerifier` — zero new dependencies, no new database table) bearer token carrying the authenticated `staff_user_id`. Verified purely by signature (no DB round-trip for the check itself); `Staff::BaseController` additionally confirms the `StaffUser` still exists before treating a request as authenticated.
+- Stub-strength per REQ-STAFF-001: no expiration, no revocation, no refresh-token mechanism — a deliberate, documented simplification for a P0 stub, not an oversight.
+- `POST /staff/seat` (Phase 5B.6) now requires this token — `Staff::SeatController` inherits `Staff::BaseController`'s authentication check instead of being callable unauthenticated. This closes the gap Phase 5B.6 explicitly flagged as deferred "to whichever future phase builds `POST /staff/login`."
+- Guest/staff authentication are kept structurally separate, not just conventionally: a guest's `active_visit_token` is a random, unsigned, DB-verified value; a staff token is a signed payload verified without touching the database. A guest token can never pass staff verification because it isn't a validly-signed payload at all, not merely because it's looked up in a different table.
+- One demo `StaffUser` seeded (`db/seeds.rb`) — none existed before this phase — using obviously-fake, non-sensitive local-dev-only credentials (the same category as this project's already-committed `database.yml` dev defaults), documented explicitly rather than left for someone to guess or invented silently.
 
 ### `GET /staff/queue`
 
@@ -102,7 +109,7 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Implementation status (Phase 5B.6, `Staff::ConfirmSeatingService` / `Staff::SeatController`):**
 - Implemented now: `seating_code` lookup (via the existing partial unique index, never by `QueueEntry` id/phone/token/idempotency-key), row locking (`QueueEntry` then its own `SeatingAssignment`, a fixed single-path order), the atomic `ready`+`pending → seated`+`active` transition, all documented error cases above, verified under real PostgreSQL concurrency (exactly one of two simultaneous requests for the same code succeeds, the other observes `already_confirmed`).
-- **No staff authentication.** No session/login mechanism exists anywhere in this codebase yet (`StaffUser` has `has_secure_password` but no login endpoint — deferred every phase since 5B.2). This endpoint is therefore callable by anyone who can reach it, with no session check. This is a known, explicitly-documented gap for this phase (per this phase's own governing prompt §15: "do NOT create a complete authentication system... clearly report authentication status"), not a silent omission — staff login/session enforcement is deferred to whichever future phase builds `POST /staff/login`.
+- **Staff authentication now required (Phase 5B.7).** `POST /staff/login` exists (see above) and this endpoint now requires its token (`Staff::BaseController`) — closing the gap this section previously documented as "deferred to whichever future phase builds `POST /staff/login`." An unauthenticated or invalid-token request receives `401` before any `seating_code` lookup happens.
 - Never allocates, never selects/reserves a table, never creates a `SeatingAssignment`/`SeatingAssignmentTable` row, never generates a new `seating_code` — `Allocation::DecisionEngine`/`ReservationService`/`Orchestrator` are never called from this endpoint.
 
 ### `POST /staff/seating-assignments/release` — Release seating assignment
