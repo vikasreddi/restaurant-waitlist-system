@@ -99,3 +99,14 @@ None of these required `BLOCKED — HUMAN DECISION REQUIRED` — the symlink and
 - Checked that `backend/bin/docker-entrypoint`'s `rails db:prepare` call does not implicitly create any business schema — confirmed; zero migrations exist, so it only creates Rails' own internal tracking tables (`schema_migrations`, `ar_internal_metadata`), consistent with Prompt 5/7 §7 ("no business schema yet, only whatever minimal Rails database setup proves the app can connect").
 
 No contradictions found requiring escalation.
+
+## Session 6 (Phase 5A.1 — cleanup + git checkpoint) — judgment calls
+
+| Item | What happened | Reasoning |
+|---|---|---|
+| Default git branch named `main` (not git's own default `master`) | Agent set this via `git symbolic-ref HEAD refs/heads/main` before the first commit, without asking | Ordinary, low-stakes tooling convention (now the standard default on GitHub/GitLab and most modern tooling); not a product/architecture decision, fully within "agents may... implement within assigned scope" for a task explicitly about setting up git. |
+| `.gitignore` includes `backend/config/master.key` even though the governing prompt's example list didn't name it | Agent added it | The prompt's §7 explicitly says "do not commit secrets, passwords, private credentials" — Rails' `config/master.key` is exactly that category (it's the decryption key for `credentials.yml.enc`); omitting it would have been a real gap in "inspect before commit," not a faithful reading of the instruction's intent. |
+| Generating `frontend/package-lock.json` (missing from the host) before committing | Agent did this as part of §7's "review the files that will be committed," not asked for explicitly | Discovered during the required pre-commit review, not invented busywork; committing a Node project without its lockfile would undermine "the commit should represent the Phase 5A runnable baseline" (§7/§8) — a reproducibility gap directly relevant to what this checkpoint is for. Did not touch anything else in `frontend/` or `backend/` beyond this. |
+| Author identity on the first commit (`vikas@Rajas-Air.lan`, auto-derived) | Agent did not configure `git config user.name`/`user.email` globally or locally, and did not guess the candidate's real name/email | Guessing or fabricating a person's name/email for commit authorship isn't the agent's call to make; flagged to the candidate in the session report instead, so they can set it (and optionally amend the commit) themselves if it matters for how the assignment reads. |
+
+None of these required `BLOCKED — HUMAN DECISION REQUIRED` — all four are ordinary tooling/process judgment calls within the explicit scope of "git setup" and "inspect before commit," not product, architecture, or business-behavior decisions.

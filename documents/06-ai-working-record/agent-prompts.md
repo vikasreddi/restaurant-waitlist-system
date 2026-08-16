@@ -451,6 +451,44 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 
 ---
 
+## Prompt 8 — Phase 5A.1: Bootstrap Cleanup + Git Checkpoint
+
+**Source file:** `restaurant_waitlist_phase5A1_git_checkpoint_prompt.md` (candidate-authored, read from `~/Downloads/`, in a new session immediately after Phase 5A's completion).
+
+**Session context:** A small, explicitly-scoped cleanup task before Phase 5B — correct stale "no application code exists yet" language left over from before the bootstrap, and establish the first git checkpoint (the project had no repository at all until this session).
+
+**Full text:**
+
+> # Phase 5A.1 — Bootstrap Cleanup + Git Checkpoint
+>
+> Phase 5A is complete — the runnable foundation (React+TS frontend, Rails API backend, PostgreSQL, Docker Compose, `/health`, frontend→backend health verification) has been created and verified. This task is a small cleanup/checkpoint before Phase 5B.
+>
+> **1. Read current state first:** `CLAUDE.md`, `README.md`, `documents/06-ai-working-record/`, `docker-compose.yml`, `backend/`, `frontend/`, plus `git status` and `git log --oneline --max-count=5`. Do not recreate the project, redo Phase 5A, or start Phase 5B.
+>
+> **2. Update CLAUDE.md:** correct only the stale project-status/bootstrap sections to state Phase 5A bootstrap is complete, a runnable React+Rails+PostgreSQL foundation exists, Docker Compose is operational, `/health` is available, and domain/business implementation has NOT started. Keep all existing engineering rules and product decisions intact — do not weaken or rewrite the approved domain rules.
+>
+> **3. Update README.md:** must no longer say "No application code has been written yet" or imply the bootstrap hasn't happened. Include a concise "Current implementation status" section (implemented: React/Rails/PostgreSQL/Docker Compose/health endpoint/connectivity check; not yet implemented: queue domain, guest join, guest identity, idempotency, table allocation, starvation protection, staff operations, Redis, Sidekiq). Do not rewrite the whole README unnecessarily or invent completed functionality.
+>
+> **4. Verify AI working record:** ensure the Phase 5A session record actually contains the environment issue, the Intel-vs-ARM64 Homebrew issue, the Colima architecture resolution, final Docker verification, and the bootstrap result. Do not fabricate anything; if already present, do not duplicate — add only a concise checkpoint entry if necessary.
+>
+> **5. Requirement traceability:** do NOT create business requirement mappings yet (Phase 5B does that) — only record that Phase 5A = infrastructure/bootstrap and no business requirements have been implemented yet.
+>
+> **6. Git setup:** the AI working record must be committed alongside the code. Check whether a top-level git repository already exists; if not, `git init`. Create/verify a root-level `.gitignore` excluding `.env`/`.env.*`, `.DS_Store`, `node_modules/`, `coverage/`, `log/`, `tmp/`, `vendor/bundle/` — but must NOT ignore `documents/`, `CLAUDE.md`, `.claude/`, `README.md`, `docker-compose.yml`.
+>
+> **7. Inspect before commit:** run `git status`, review what will be committed. Do not commit secrets, passwords, private credentials, generated personal machine configuration, or unnecessary large files.
+>
+> **8. First git checkpoint:** if this is a new repository, create the first commit: `chore: bootstrap runnable application`, containing the runnable application + AI working record + CLAUDE.md + Claude agents/skills/commands/config + README + Docker Compose. If a repository already exists and Phase 5A is already committed, do not duplicate the commit.
+>
+> **9. Scope boundary:** do NOT create any Phase 5B business functionality — no `QueueEntry`/`Table`/`SeatingAssignment`/`IdempotencyRecord` models, no restaurant table seed data, no allocation/queue service, no guest/staff APIs, no authentication, no Redis, no Sidekiq, no starvation logic. This task is only cleanup + checkpoint.
+>
+> **10. AI working record:** record this session concisely in `agent-prompts.md`, `session-log.md`, `agent-decisions.md`. Do not create an AI correction unless a real mistake occurs.
+>
+> **11. Verification:** after cleanup, verify the Phase 5A application still works — at minimum `docker compose config`, and if practical `docker compose up` confirming PostgreSQL/Rails/`/health`/frontend. Do not make unrelated fixes.
+>
+> **12. Final report:** documentation files updated and stale statements corrected; git status (existed already? initialized? commit hash and message?); verification results; AI working-record files updated; explicit scope confirmation: "Phase 5A.1 is complete. No Phase 5B business functionality was implemented." Then STOP — next authorized task is Phase 5B (Domain Model + Migrations + Seed Data), not begun in this session.
+
+---
+
 ## How these prompts were used
 
 - Prompt 1 produced the independent analysis in `../01-requirements/` (originally delivered as an in-conversation analysis; formalized into the requirements documents during the Prompt 2 session).
@@ -459,4 +497,5 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 - Prompt 4 authorized building the AI-native development environment itself (`CLAUDE.md`, `.claude/agents/`, `.claude/skills/`, `.claude/commands/`, `.claude/settings.json`) around the now-frozen specification, while explicitly delegating several configuration-only judgment calls (MCP, hooks) to the agent — see `agent-decisions.md` "Session 3" for how each was resolved and why.
 - Prompt 5 was the first implementation-authorizing prompt (Session A bootstrap); it was interrupted by Prompt 6, a real-time human stop instruction, before the checkpoint could be reached — see `session-log.md` Session 4 for the full account of what was completed vs. blocked.
 - Prompt 7 resumed that same bootstrap objective after the candidate fixed the environment blockers themselves, and the checkpoint was reached and verified in that session — see `session-log.md` Session 5.
+- Prompt 8 (below) was a small cleanup/checkpoint task — correcting stale post-bootstrap documentation and creating the first git commit — explicitly not Phase 5B.
 - A structural-reference project (`mentoring-session-booking-main`) was present in the same Downloads folder; per Prompt 2 §14, only its top-level documentation organization (a `docs/` folder with `ARCHITECTURE.md`, `DECISION_LOG.md`, `DIAGRAMS.md`, plus a `.kiro/specs`/`.kiro/steering` spec-driven layout) was glanced at for structural awareness. No content, decisions, or implementation from that project were copied — this project's own documentation structure follows Prompt 2 §11's explicit spec instead. That same reference project's backend (Rails API + PostgreSQL + Docker Compose) also informed the Prompt 3 stack evaluation (`decision-log.md` DEC-012) as evidence of the candidate's working familiarity with the proposed stack.

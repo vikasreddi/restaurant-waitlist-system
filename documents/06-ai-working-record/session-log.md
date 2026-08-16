@@ -180,3 +180,30 @@ Then resume Prompt 5 from §5 (Backend Bootstrap) onward.
 **End-of-session report to candidate:** environment versions, files created/modified, full verification results, the problem encountered and how it was resolved, AI working-record files updated, and the explicit phase-status confirmation — delivered in the final chat response of this session.
 
 **Next session (not yet run):** Phase 5B — Domain Model + Migrations + Seed Data. Not started in this session, per the explicit phase boundary.
+
+---
+
+## Session 6 — 2026-08-16 — Phase 5A.1 cleanup + first git checkpoint
+
+**Environment:** Claude Code CLI, same local macOS environment and repository (`~/Documents/restaurant-waitlist/`), new conversation, immediately following Session 5.
+
+**Phase 5A.1: corrected stale project-status documentation and established the first version-control checkpoint before domain implementation.**
+
+- Inspected current state first (`git status`/`git log` — confirmed no repository existed anywhere in the project; `CLAUDE.md`, `README.md`, `docker-compose.yml`, `backend/`, `frontend/` — all as Session 5 left them). Did not recreate, redo, or start Phase 5B.
+- Updated `CLAUDE.md`'s "Current status" and "Phase boundary" sections only — now states Phase 5A (Sessions 4–5) is complete and verified, and explicitly lists what's still not implemented (domain models, allocation, guest/staff APIs, auth, Redis/Sidekiq). Product/engineering/AI rules and all `DEC-*`/`INV-*` references left untouched.
+- Updated `README.md`: replaced the "no application code has been written yet" status line and added the "Current implementation status" section (implemented vs. not-yet-implemented lists) plus working `docker compose up` run instructions, matching what was actually verified in Session 5.
+- Verified the existing AI working record already contains the environment issue, the Intel-vs-ARM64 Homebrew discovery, the Colima architecture resolution, final Docker verification, and the bootstrap result in full (Session 5's entry) — did not duplicate any of it; this entry is the "concise checkpoint entry" the governing prompt allowed for.
+- Added a one-line status note to `documents/01-requirements/traceability.md` ("Phase 5A = infrastructure/bootstrap only... no business requirement... has been implemented yet") — did not add any business requirement mapping, per the explicit instruction that Phase 5B establishes the first one.
+- **Git setup:** no repository existed at the project root (true since Session 1). Ran `git init`, set the default branch to `main` (a minor, unescalated judgment call — see `agent-decisions.md`), and wrote a root-level `.gitignore` (`.env`/`.env.*`, `.DS_Store`, `node_modules/`, `vendor/bundle/`, `coverage/`, `log/`, `tmp/`, `frontend/dist/`, and `backend/config/master.key` specifically as a secret-adjacent file the governing prompt's §7 concern covers even though it wasn't in the example list). Confirmed via `git check-ignore -v` that `.DS_Store`, `backend/log/*`, `backend/tmp/*`, and `backend/config/master.key` are excluded, and that `documents/`, `CLAUDE.md`, `.claude/`, `README.md`, `docker-compose.yml` are not.
+- **Reviewed staged files before committing** (§7) and caught a real gap: `frontend/package-lock.json` had never been persisted to the host — `npm install` only ran inside the Docker build layer, and the runtime bind mount (`./frontend:/app`) shadowed it with the host's (nonexistent) copy. Generated it properly via `docker compose exec frontend npm install` so it landed in the bind-mounted directory, then confirmed it appeared in what would be staged. This is a small, directly-related fix to what this exact checkpoint is supposed to capture (a reproducible baseline), not an unrelated fix.
+- Created the first commit: **`2b653ff` — "chore: bootstrap runnable application"** (123 files). Contains the runnable application (backend/, frontend/, docker-compose.yml), the full AI working record, `CLAUDE.md`, and `.claude/agents|skills|commands|settings.json` — matching the governing prompt's required checkpoint contents exactly.
+- **Noted, not fixed:** the commit's author identity (`vikas <vikas@Rajas-Air.lan>`) was auto-derived from the OS account/hostname since no global git identity is configured on this machine. Flagged to the candidate in the final report rather than guessed at or silently left uncommented — this may matter for how the assignment's authorship reads during review.
+- **Post-checkpoint verification** (§11): `docker compose config` succeeded; `docker compose ps` showed all three containers still `Up`/`(healthy)` (never stopped since Session 5, so this also incidentally demonstrates the stack surviving a `git init` + commit alongside it); re-curled `/health` (200), frontend (200), and re-ran the `ActiveRecord::Base.connection.active?` check (`DB_CONNECTED`) — no regressions introduced by the cleanup.
+
+**No AI correction recorded.** No genuine agent mistake occurred this session that fits `ai-corrections.md`'s pattern (an agent claim a human had to catch as wrong) — the package-lock.json gap was self-caught during the routine pre-commit review this task itself asked for (§7), not a confident wrong assertion.
+
+**AI working record updated this session:** `agent-prompts.md` (Prompt 8, verbatim), `session-log.md` (this entry), `agent-decisions.md` (the `main`-branch-name and `.gitignore`-scope judgment calls).
+
+**End-of-session report to candidate:** documentation files updated and exact stale statements corrected; git status (no prior repository → initialized → commit hash/message); verification results; AI working-record files updated; explicit scope confirmation — delivered in the final chat response of this session.
+
+**Next session (not yet run):** Phase 5B — Domain Model + Migrations + Seed Data. Not started in this session, per the explicit phase boundary.
