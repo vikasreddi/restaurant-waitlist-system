@@ -6,7 +6,7 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 - All write endpoints return a distinguishable error shape for: `validation_error`, `not_found`, `conflict`, `internal_error`.
 - All timestamps are server-generated, never client-supplied.
-- Guest endpoints authenticate via the active-visit token (transport — header, cookie, or path — is an implementation-phase detail, not yet fixed); staff endpoints authenticate via the staff session established at login.
+- Guest endpoints authenticate via the active-visit token, presented as `Authorization: Bearer <active_visit_token>` (fixed as of Phase 5B.4 — chosen over a query string or path segment specifically so the token never ends up in server/proxy access logs or browser history); staff endpoints authenticate via the staff session established at login.
 
 ## Guest endpoints
 
@@ -31,7 +31,7 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 ### `GET /guest/queue-entries/current` — View position / recover visit
 
-**Auth:** active-visit token.
+**Auth:** active-visit token, `Authorization: Bearer <active_visit_token>`.
 
 **Response 200 (`waiting`):** `{ entry_id, status: "waiting", position }`
 
@@ -39,7 +39,13 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Response 200 (terminal entry):** `{ status: "seated" | "left" | "no_show" }` — no live position field, since it no longer represents an active session (DEC-006).
 
-**Response 404 / equivalent "no active visit":** when the token is missing/unknown — treated as "start a new join," not a server error.
+**Response 404 / equivalent "no active visit":** when the token is missing/unknown — treated as "start a new join," not a server error. Deliberately identical for "missing," "malformed," and "doesn't match any entry" — there is no separate "token exists but belongs to someone else" response to leak, since lookup is solely by exact token match.
+
+**Position semantics (Phase 5B.4, `Guest::CurrentQueueStatusService`):** `position` is a **chronological rank among currently-`waiting` entries only** — how many other groups are currently waiting and joined before this one, plus one. This is a deliberate, documented simplification for this phase, not the position model's final form. `functional-spec.md` §9 and DEC-005 define the *eventual* position as reflecting current table availability, compatibility, wait-time aging, and starvation-protection state (`seating-allocation-policy.md`) — none of that exists yet (Phase 5B.5, the allocation service). Returning a richer number now would mean fabricating allocation-priority data that hasn't actually been computed. **`position` is informational only and is never a guarantee of final seating order** — a later-joined but starvation-protected or better-fitting group can and will be seated ahead of a numerically "lower position" group once the allocation service exists, exactly as `seating-allocation-policy.md`/`starvation-policy.md` describe. This will be replaced with the full DEC-005 computation in Phase 5B.5, not layered on top of the chronological number.
+
+**Implementation status (Phase 5B.4, `Guest::CurrentQueueStatusService` / `Guest::QueueEntriesController#current`):**
+- Implemented now: token-based lookup (indexed on `active_visit_token`, never phone/id/idempotency-key), all four response shapes above, the DEC-015 lazy-expiration checkpoint (an overdue `ready` entry is expired to `no_show` and its table(s) released, in the same transaction, before the response is built — via `SELECT ... FOR UPDATE` on the entry row, matching `domain-model-proposal.md` §11's existing concurrency plan; no background job), and the chronological-rank `position` described above.
+- Deferred to Phase 5B.5: the full DEC-005 position computation (table availability/compatibility/aging/starvation-aware rank).
 
 ### `POST /guest/queue-entries/current/leave` — Leave
 

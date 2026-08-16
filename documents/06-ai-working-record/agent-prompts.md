@@ -764,6 +764,7 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 - Prompt 13 (below) — the candidate's first attempt to paste it was truncated mid-"Migration Safety" section, flagged and not acted on; the complete version arrived as a file, `Phase_5B_2_Prompt.md`, and is recorded verbatim below. This was the first prompt in the entire project to actually authorize writing application code.
 - A structural-reference project (`mentoring-session-booking-main`) was present in the same Downloads folder; per Prompt 2 §14, only its top-level documentation organization (a `docs/` folder with `ARCHITECTURE.md`, `DECISION_LOG.md`, `DIAGRAMS.md`, plus a `.kiro/specs`/`.kiro/steering` spec-driven layout) was glanced at for structural awareness. No content, decisions, or implementation from that project were copied — this project's own documentation structure follows Prompt 2 §11's explicit spec instead. That same reference project's backend (Rails API + PostgreSQL + Docker Compose) also informed the Prompt 3 stack evaluation (`decision-log.md` DEC-012) as evidence of the candidate's working familiarity with the proposed stack.
 - Prompt 14 (below) authorized the first real business API — guest join with idempotency — supplied complete, in one piece, as `Phase_5B_3_Guest_Join_API_Prompt(1).md`, no truncation this time.
+- Prompt 15 (below) authorized the next vertical slice — guest current-visit status and an informational (deliberately non-final) queue position — supplied complete as `Phase_5B_4_Guest_Current_Queue_Status_Position_Prompt(1).md`.
 
 ---
 
@@ -840,3 +841,75 @@ Verbatim record of the prompts actually given to the AI agent (Claude Code) for 
 > **§34 Success criteria:** the 21-item checklist (endpoint implemented; valid request creates a `waiting` `QueueEntry`; token generated, persisted, non-sequential; idempotency key persisted; DB uniqueness protects idempotency; same-key retry doesn't duplicate and returns the same logical result; conflicting same-key request doesn't mutate the original; same phone usable by separate joins; new key can start a new visit; no table/`SeatingAssignment`/seating code created; API tests pass; DB/concurrency tests pass; actual curl verification done; documentation updated; AI working record updated; git checkpoint created; no Phase 5B.4+ functionality implemented).
 >
 > **§35 Final report format:** PASS/BLOCKED status; 1. Endpoint; 2. Request; 3. Success Response; 4. Idempotency (same-key retry, concurrent same-key, conflicting same-key, same-phone-different-keys); 5. Persistence; 6. Tests (Total/Passed/Failed/Skipped + key idempotency/concurrency tests named); 7. Manual API Verification (first join, exact retry, conflicting retry); 8. Database Verification; 9. Documentation; 10. AI Working Record; 11. Git (commit/message/working tree); 12. Scope Verification (explicit confirmation that guest position, guest leave, allocation, weighted aging, starvation, staff APIs, Redis, Sidekiq, notifications, live updates, rate limiting, and frontend business flows were NOT implemented). End exactly with: "Phase 5B.3 is complete. The guest join API, anonymous visit token, idempotency behavior, persistence, tests, and manual API verification are implemented and verified. No Phase 5B.4+ functionality was implemented in this phase." STOP.
+
+---
+
+## Prompt 15 — Phase 5B.4: Guest Current Queue Status + Position
+
+**Source:** `Phase_5B_4_Guest_Current_Queue_Status_Position_Prompt(1).md` (candidate-authored, read from `~/Downloads/`), delivered complete in a single message.
+
+**Session context:** the next vertical slice after Guest Join — `GET /guest/queue-entries/current`, identifying the visit by `active_visit_token` and returning its current state plus a guest-facing informational position. Explicitly forbids implementing the *final* allocation-priority position (compatibility scoring, weighted aging, starvation scoring, table matching) in this phase — that's Phase 5B.5.
+
+**Full text (condensed; all 30 numbered sections' substantive content preserved):**
+
+> **Framing:** the restaurant is NOT FIFO — do NOT blindly implement `position = count(queue_entries created before me)` as if that were the allocation algorithm. The future allocation system uses compatibility-aware weighted aging + a maximum-wait safeguard; the position API must not pretend FIFO is that algorithm.
+>
+> **§1 Human-driven development rule:** do not reinterpret approved product decisions, silently change business rules, or implement future allocation behavior prematurely. If a specification contradiction is found: identify it, explain it, resolve it using already-recorded decisions where possible, and STOP for human review only if the product decision itself genuinely needs to change. Normal implementation-level decisions are allowed.
+>
+> **§2 Read first:** `CLAUDE.md`, all of `documents/01–06`, at minimum `api-spec.md`, `functional-spec.md`, `domain-model-proposal.md`, `domain-model.md`, `data-model.md`, `test-strategy.md`, `seating-allocation-policy.md`, `starvation-policy.md`; also inspect `backend/app/`, `config/routes.rb`, `test/`, `db/schema.rb`, and review the existing Phase 5B.3 guest join implementation before writing new code. Do not introduce a second architecture pattern.
+>
+> **§3 First task — reconcile position semantics:** before coding, explicitly answer "what does 'position' mean to a guest in a NON-FIFO waitlist?" Do NOT assume earlier `joined_at` = ahead is equivalent to better allocation priority — those are different concepts, since the eventual engine weighs compatibility + aging + starvation protection + table availability, not chronological rank alone.
+>
+> **§4 Approved position approach for this phase:** implement a deliberately simple guest-facing position that does NOT claim to be final allocation priority — the simplest deterministic representation supported by the existing specification, derived from the currently-waiting queue. **CRITICAL: do NOT implement compatibility scoring, weighted aging, starvation scoring, table matching, or allocation simulation — those belong to Phase 5B.5.** If the existing requirements explicitly require a different position semantic, follow the requirement and document the distinction. The API documentation must clearly state guest position is informational, not a guarantee of seating order.
+>
+> **§5 Endpoint:** use the route already established by `api-spec.md` — do NOT invent a new one; conceptually `GET /guest/queue-entries/current`, but follow the approved route if it differs. Identify the guest via `active_visit_token` only — never phone number, database id, or idempotency key.
+>
+> **§6 Authentication model:** anonymous guest endpoint; the guest proves ownership by presenting `active_visit_token`, via whatever transport the approved API contract already specifies (e.g. `Authorization: Bearer <token>` or an `X-Visit-Token` header) — do not invent a second token mechanism.
+>
+> **§7 Current visit lookup:** `active_visit_token → QueueEntry → current guest state`; the token must resolve only the intended entry, using the existing database uniqueness guarantee; no unnecessary search by phone number.
+>
+> **§8 Success response:** for a valid current visit, return the guest's current state (conceptually `{ entry_id, status, position }`) using the exact JSON convention already established in `api-spec.md` (preserving a `data` wrapper if the spec uses one). Never expose internal table ids, `SeatingAssignment` ids, other guests' phone numbers/tokens, or database internals.
+>
+> **§9 Position semantics:** the guest should understand "there are approximately N entries currently ahead of you according to the current guest-facing queue representation" — NOT "you are guaranteed to be the Nth group seated," since allocation is not FIFO. Document this explicitly.
+>
+> **§10 Do NOT implement final allocation priority:** no `compatibility_score + waiting_time_weight + starvation_weight`, no `final_allocation_priority`, no call to a future allocation engine that doesn't exist, no inspecting table availability to compute position, no reserving tables.
+>
+> **§11 Waiting state:** for `status = waiting`, return the current informational position; make clear `waiting` means still in queue, not yet assigned a reservation.
+>
+> **§12 Ready state:** for `status = ready`, the guest already has a seating assignment — return the approved READY representation (at minimum `status = ready`; `seating_code` if the approved API allows it). Do not allocate anything here — READY means allocation already happened in a (future) allocation phase; this endpoint only reads state.
+>
+> **§13 Seated state:** for `status = seated`, return the appropriate current state per `api-spec.md`, without unnecessary internal assignment/table information.
+>
+> **§14 Left/no_show:** for terminal states, behave per the approved API spec (`404` or `200` with terminal status, whichever it defines) — do not invent behavior if already defined; document whichever is implemented.
+>
+> **§15 Invalid token:** return the approved safe not-found/unauthorized response; never leak "token exists but belongs to another guest" as a distinct case.
+>
+> **§16 Token security:** do not log the full `active_visit_token` in normal logs, avoid exposing it in error messages, never include another guest's token in any response, don't expose internal `QueueEntry` ids unless the API contract requires the public identifier.
+>
+> **§17 Expiration consideration:** the approved READY-expiration decision (5-minute timeout → auto no_show → tables released, evaluated lazily) must NOT be built as a background job in this phase. If this endpoint reads a READY entry and the existing specification already explicitly requires lazy expiration to be applied here, implement it; otherwise document that the full DEC-015 orchestration completes with the seating/allocation service. No Sidekiq.
+>
+> **§18 Performance:** use the indexed `active_visit_token` lookup, not a full queue scan, to identify the guest; use the simplest appropriate query for position given the current phase; don't optimize prematurely, but keep the query understandable given potentially hundreds of waiting groups.
+>
+> **§19 Controller vs. service:** keep the controller thin; preferred structure Controller → `CurrentQueueStatusService`/equivalent → `QueueEntry`; no large position algorithm directly in the controller; don't create unnecessary abstraction if the existing architecture already uses a simpler pattern.
+>
+> **§20 Required tests:** valid waiting guest (token → waiting entry → position returned); invalid token → 404/401; one guest cannot retrieve another's visit; READY representation; SEATED representation; LEFT behavior; NO_SHOW behavior; no-allocation (a position request must not create `SeatingAssignment`/`SeatingAssignmentTable` or reserve tables); position ordering across several waiting entries; a non-FIFO warning assertion (position is not treated as a seating-order guarantee).
+>
+> **§21 Position test example:** use entries A (earliest), B, C (latest) and verify the implemented informational position semantics — do NOT write a test claiming "A must always be seated before B," since final allocation is intentionally non-FIFO.
+>
+> **§22 API verification:** after tests pass, run the actual app; verify a waiting guest (200, `status=waiting`, position returned), an invalid token (correct error), multiple waiting guests' positions, and no side effects (`SeatingAssignment`/`SeatingAssignmentTable` counts unchanged after GETs). Clean up disposable data afterward.
+>
+> **§23 Documentation:** update `api-spec.md` only where needed — endpoint, authentication/token mechanism, response, position semantics, non-FIFO disclaimer, READY/SEATED/LEFT/NO_SHOW behavior, invalid-token behavior; also update requirements traceability if required. Do NOT claim final allocation priority is implemented.
+>
+> **§24 Requirement traceability:** explicitly distinguish implemented-now (current visit lookup, informational position, current status, token-based recovery) from deferred (compatibility-aware allocation priority, weighted aging, starvation protection, actual table selection, final seating order). Do not mark future allocation requirements complete.
+>
+> **§25 AI working record:** update `agent-prompts.md`, `session-log.md`, `agent-decisions.md` with this prompt, the position-semantics decision, implementation decisions, test results, manual API verification, and genuine AI corrections if any. If FIFO is ever proposed as the *final* seating priority, that is a design error — do not silently accept it; record the correction if it occurs.
+>
+> **§26 AI correction rule:** if a genuine AI mistake occurs — identify it, explain why it conflicts with the approved design, correct it, add a regression test where appropriate, record it in `ai-corrections.md`. Do not manufacture a correction if none occurred.
+>
+> **§27 Git checkpoint:** review `git status`/`git diff`/`git diff --stat`; run the full relevant test suite and manual API verification; verify no secrets, no unrelated changes, no allocation code, no Redis/Sidekiq, no frontend business logic; then commit `feat: implement guest queue status api`; after, `git status` and `git log --oneline --max-count=3`; working tree should be clean.
+>
+> **§28 Strict phase boundary — do NOT implement:** allocation (compatibility scoring, weighted aging, starvation protection, table selection, adjacency matching, `SeatingAssignment`/`SeatingAssignmentTable` creation); `POST /guest/leave` unless already explicitly required by the approved Phase 5B.4 contract; any staff API; any infrastructure (Redis, Sidekiq, background workers, notifications, WebSockets/SSE, rate limiting); any guest or staff UI.
+>
+> **§29 Success criteria:** the 19-item checklist (endpoint implemented; token identifies the visit; invalid token handled safely; WAITING returned correctly; informational position returned and documented as non-guaranteed; READY/SEATED/LEFT/NO_SHOW handled per spec; no allocation/table-reservation/`SeatingAssignment` creation occurs; tests pass; manual verification completed; documentation + AI working record updated; git checkpoint created; no Phase 5B.5+ functionality implemented).
+>
+> **§30 Final report format:** PASS/BLOCKED status; 1. Endpoint; 2. Authentication/Token; 3. Position Semantics (and explicitly why it is NOT final allocation priority); 4. Response Examples (WAITING/READY/SEATED/terminal/invalid token); 5. Tests (Total/Passed/Failed/Skipped + important tests); 6. Manual API Verification; 7. Side-Effect Verification (no `SeatingAssignment`/`SeatingAssignmentTable` created, no table reserved); 8. Documentation; 9. AI Working Record; 10. Git (commit/message/working tree); 11. Scope Verification (explicit confirmation allocation, compatibility scoring, weighted aging, starvation protection, table selection, adjacency matching, staff APIs, guest leave, Redis, Sidekiq, notifications, live updates, rate limiting, and frontend business flows were NOT implemented). End exactly with: "Phase 5B.4 is complete. The guest current-visit/status API and informational queue position are implemented and verified. Final allocation priority and table-selection logic remain deferred to Phase 5B.5. No Phase 5B.5+ functionality was implemented in this phase." STOP.

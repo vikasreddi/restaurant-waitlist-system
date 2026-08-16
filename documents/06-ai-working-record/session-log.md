@@ -392,3 +392,40 @@ Then resume Prompt 5 from §5 (Backend Bootstrap) onward.
 **Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
 
 **Next session (not yet run):** Phase 5B.4 or equivalent — likely the allocation service and/or staff confirmation flow, per whatever the candidate authorizes next.
+
+---
+
+## Session 13 — 2026-08-16 — Phase 5B.4: guest current-visit status + informational position
+
+**Environment:** Claude Code CLI, same repository, continuing directly from Session 12 in the same conversation. Backend/frontend/postgres containers still running.
+
+**Phase 5B.4 — Guest Current Queue Status + Position.** The candidate's governing prompt (`Phase_5B_4_Guest_Current_Queue_Status_Position_Prompt(1).md`) was delivered complete in one piece.
+
+**First task, done before any code (per the prompt's own §3): reconciled position semantics.** `functional-spec.md` §9 and DEC-005 define the *eventual* guest position as reflecting current table availability, compatibility, wait-time aging, and starvation-protection state — the full output of `seating-allocation-policy.md`. This phase's own §4/§10 explicitly forbid implementing any of that (compatibility scoring, weighted aging, starvation scoring, table matching) until Phase 5B.5. This is a real, narrow tension between an approved decision and this phase's own boundary — resolved the same way as Phase 5B.3's `position`-omission decision: the prompt itself directly and explicitly authorizes a documented, phase-scoped simplification rather than leaving the tension for the agent to invent an answer to. Chosen representation: **a chronological rank among currently-`waiting` entries only** (how many other `waiting` groups joined earlier, plus one) — the only input left available once compatibility/aging/starvation are all off-limits. Documented, not silently substituted, in both `api-spec.md`'s new "Position semantics" note and here.
+
+**Implementation (all inside the running `backend` container):**
+- Route: `GET /guest/queue-entries/current` — a `collection` route on the existing `guest/queue_entries` resource (matches the route already defined in `api-spec.md`).
+- `Guest::CurrentQueueStatusService` (`app/services/guest/current_queue_status_service.rb`): resolves `active_visit_token` → `QueueEntry` via the existing unique index (`QueueEntry.lock.find_by(active_visit_token:)`, inside a transaction — the same `SELECT ... FOR UPDATE` pattern `domain-model-proposal.md` §11 already specified for this exact case), applies the DEC-015 lazy-expiration check inline if the entry is `ready` and overdue (releases the `SeatingAssignment` and its `SeatingAssignmentTable` row(s), transitions the entry to `no_show`), then computes the chronological position only for entries still `waiting`.
+- `Guest::QueueEntriesController#current` (extended, not a new controller — thin, translates the service's `Result` into `200`/`404`).
+- **Token transport fixed as an implementation decision** (api-spec.md had explicitly left this "not yet fixed"): `Authorization: Bearer <active_visit_token>` — chosen over a query string or path segment specifically so the token never lands in server/proxy access logs or browser history.
+- 22 new tests: 15 in `test/services/guest/current_queue_status_service_test.rb` (token resolution, waiting/position, ready-not-expired, DEC-015 expiration including persistence and the not-yet-overdue no-op case, all four terminal-state shapes, no-allocation-side-effects), 7 in `test/controllers/guest/current_queue_status_controller_test.rb` (real HTTP requests: waiting+position, missing header, unknown token, cross-guest isolation, ready+seating_code, seated-only-status, no side effects across repeated GETs).
+
+**No genuine AI mistake occurred this session** — every test passed on first run (105 total after this phase's additions, 0 failures), so no `ai-corrections.md` entry was added. Recorded here explicitly per the prompt's own §25/§26 instruction not to manufacture a correction that didn't happen.
+
+**Verification actually performed, not claimed without running it:**
+- Full suite: 105 runs, 200 assertions, 0 failures, 0 errors, 0 skips.
+- Manual curl verification (§22), using disposable join data cleaned up immediately after (`QueueEntry.count == 0` post-cleanup; 40 tables / 19 adjacency pairs undisturbed): three waiting guests created via the real join endpoint, first guest's read → `position: 1`, third guest's read → `position: 3`; an unknown token and a request with no `Authorization` header both → `404` with the same `not_found` body; `SeatingAssignment`/`SeatingAssignmentTable` counts confirmed `0` throughout (no side effects from any GET).
+- One environmental note, not a defect: the backend container was proactively restarted before manual verification (a known artifact from Phase 5B.3's session — a long-running dev server doesn't pick up brand-new `app/` subdirectories until restarted); this avoided a repeat of that non-issue rather than re-discovering it.
+- `ready`/expired-`ready`/`seated`/`left`/`no_show` response shapes were verified via the real HTTP integration test suite (`current_queue_status_controller_test.rb`), not via raw curl — these states can't currently be reached through any implemented API (no allocation service exists yet to create a `ready` entry), so the controller test constructs them directly against the real database and asserts on the real HTTP response, which is the same verification strength curl would add for the states curl actually can reach.
+
+**Documentation updated:** `api-spec.md` (fixed the previously-open "transport... not yet fixed" line to `Authorization: Bearer <token>`; added the "Position semantics" note explaining the chronological-rank simplification and its relationship to the deferred DEC-005 computation; added an "Implementation status (Phase 5B.4)" note), `01-requirements/traceability.md` (REQ-GUEST-002, REQ-GUEST-004 rows filled in, explicitly distinguishing "informational position implemented now" from "full DEC-005 computation deferred to Phase 5B.5").
+
+**Security/secrets check:** reviewed the diff — no passwords, API keys, tokens, `.env` files, or machine-specific secrets. The chosen `Authorization: Bearer` transport was itself picked partly for security reasons (documented above), and the endpoint never echoes another guest's token or full token values in error messages.
+
+**AI working record updated this session:** `agent-prompts.md` (Prompt 15), `session-log.md` (this entry), `agent-decisions.md` (the position-semantics reconciliation, the token-transport decision, the invalid-token-status-code decision).
+
+**Scope boundary honored:** no compatibility scoring, weighted aging, starvation scoring, table matching, or allocation simulation; no `SeatingAssignment`/`SeatingAssignmentTable` creation; no guest leave; no staff APIs; no Redis/Sidekiq/notifications/live updates/rate limiting; no frontend business flows. Only `backend/config/routes.rb`, `backend/app/services/guest/current_queue_status_service.rb`, `backend/app/controllers/guest/queue_entries_controller.rb`, `backend/test/{services,controllers}/guest/current_queue_status_*_test.rb`, and the two documentation files above were touched.
+
+**Git checkpoint:** reviewed via `git status`/`git diff --stat` before committing — see the session's final report for the exact commit hash and message.
+
+**Next session (not yet run):** Phase 5B.5 or equivalent — the allocation service (compatibility-aware aging + starvation protection) and/or staff confirmation flow, per whatever the candidate authorizes next.

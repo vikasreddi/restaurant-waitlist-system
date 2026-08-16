@@ -8,10 +8,14 @@ Rails.application.routes.draw do
   # Bootstrap-phase health check consumed by the frontend (Phase 5A). Returns JSON, not just 200.
   get "health" => "health#show"
 
-  # Guest-facing join endpoint (Phase 5B.3) — matches the route already defined
-  # in documents/05-specifications/api-spec.md; not a new URL structure.
+  # Guest-facing join + current-status endpoints — match the routes already
+  # defined in documents/05-specifications/api-spec.md; not a new URL structure.
   namespace :guest do
-    resources :queue_entries, only: [:create], path: "queue-entries"
+    resources :queue_entries, only: [:create], path: "queue-entries" do
+      collection do
+        get :current
+      end
+    end
   end
 
   # Defines the root path route ("/")
