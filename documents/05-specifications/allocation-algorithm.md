@@ -395,9 +395,26 @@ The pure decision-making portion of this specification (§3–§14) is implement
 - `Allocation::DecisionEngine` — §3–§14 (compatibility, fit, scarcity, aging, starvation, `total_score`, global candidate generation, tie-breaking). Pure: no database reads or writes, `now` injected, unit-tested without a database (`backend/test/services/allocation/decision_engine_test.rb`).
 - `Allocation::ConfigurationGenerator` — the one DB-reading piece (§4's `generate_available_configurations`, kept deliberately separate from the pure engine per this phase's own architecture boundary).
 
-**Not yet implemented (deferred to the next phase):** §12's `run_allocation_pass` repeat-until-exhausted loop, the transactional `allocate` step (§18, table locking, `SeatingAssignment`/`SeatingAssignmentTable` creation, `seating_code` generation, the `waiting → ready` transition), and wiring this engine to the actual allocation triggers (join/release/no-show/leave). `Allocation::DecisionEngine#decide` currently returns a single winner-or-none for one already-assembled candidate set — it does not yet loop, persist, or get called from anywhere in the request path.
+**Not yet implemented as of Phase 5B.5.2 (superseded by 25b below):** §12's `run_allocation_pass` repeat-until-exhausted loop, the transactional `allocate` step, and wiring this engine to the actual allocation triggers.
 
 No contradiction was found between this specification and its implementation — all 12 worked examples (§21) translate directly into passing tests with no expected-outcome changes needed.
+
+## 25b. Implementation status (Phase 5B.5.3 — transactional allocation)
+
+`Allocation::ReservationService` (`backend/app/services/allocation/reservation_service.rb`) implements §18's atomic allocation transaction — the ONE-candidate-per-call inner step, not §12's outer repeat loop (still deferred, see below):
+
+- Queries current `waiting` entries and `Allocation::ConfigurationGenerator.call`, asks the unmodified `DecisionEngine` for one winner.
+- Locks the winning configuration's table(s) via `SELECT ... FOR UPDATE`, always in ascending `table_id` order (§18) — a single lock for a `SingleTable` candidate, both locked together for a `CombinedPair` candidate, matching `allocation-spec.md` §5/§17 exactly.
+- Re-checks table availability and the entry's `waiting` status *after* acquiring the lock(s) — the pre-lock `DecisionEngine` decision is never trusted as a reservation.
+- On success (all inside one transaction): creates `SeatingAssignment(status: "pending")`, 1–2 `SeatingAssignmentTable` rows (`released_at` stays `NULL`), generates a `seating_code` (`Allocation::SeatingCodeGenerator` — see the OPEN-005 note below), and transitions the entry `waiting → ready`.
+- On a lost race (table no longer free, or the entry is no longer `waiting`) or a genuine DB uniqueness violation: rolls back entirely (`ActiveRecord::Rollback`, or lets `ActiveRecord::RecordNotUnique` propagate to a caught `:stale_candidate` result) — never silently picks a second candidate, never partially commits.
+- `Result#outcome` is one of `:success`, `:no_candidate` (nothing eligible), or `:stale_candidate` (the winner became unavailable before the transaction locked it).
+
+**`Allocation::SeatingCodeGenerator`** — OPEN-005 (`decision-log.md`) is still explicitly unresolved as a *product* decision; this is a placeholder implementation permitted under this phase's own governing prompt §15, recorded (not silently treated as OPEN-005 being closed) in `06-ai-working-record/agent-decisions.md` Session 16: a 6-character, `SecureRandom`-backed code from a 32-symbol alphabet excluding visually-ambiguous characters, retried inside a savepoint on a genuine collision (`ReservationService#assign_seating_code!`).
+
+**Verified with real PostgreSQL concurrency** (`backend/test/services/allocation/reservation_service_concurrency_test.rb`, real threads/connections, `use_transactional_tests = false`, same pattern as `Guest::JoinServiceConcurrencyTest`): a same-table race and a same-adjacent-pair race each resolve to exactly one successful reservation, with the loser reporting `:stale_candidate` and no partial combined allocation ever occurring.
+
+**Not yet implemented (deferred to the next phase):** §12's `run_allocation_pass` repeat-until-exhausted loop (this service allocates at most one candidate per call, by design, per this phase's own governing prompt §5), wiring this service to actual allocation triggers (join/release/no-show/leave), and everything already deferred by `allocation-spec.md` §5a onward (staff confirmation, release).
 
 ## 25. Future evolution
 

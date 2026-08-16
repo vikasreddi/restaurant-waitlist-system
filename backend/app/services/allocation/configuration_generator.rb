@@ -16,7 +16,7 @@ module Allocation
     end
 
     def call
-      free_tables = Table.all.select(&:free?)
+      free_tables = Table.order(:id).select(&:free?)
       free_table_ids = free_tables.map(&:id).to_set
 
       configurations = free_tables.map { |table| TableConfiguration.single(table) }

@@ -96,6 +96,8 @@ Called inline, only when an allocation pass (or, later, any staff/guest read tha
 
 **Corrected from an earlier draft of this document, which had this function set `group.status = seated` directly.** That was wrong against the finalized model: allocation reserves a configuration and shows the guest a code — it does not seat them. Seating only happens later, when staff confirm (§5a). See `domain-model-proposal.md` §0 for the full reasoning behind why `ready` exists as a separate step.
 
+**Implemented as of Phase 5B.5.3** (`Allocation::ReservationService`, `backend/app/services/allocation/`) — one candidate per call, real `SELECT ... FOR UPDATE` locking in ascending table-id order, post-lock re-check of both table availability and the entry's `waiting` status, atomic `SeatingAssignment`/`SeatingAssignmentTable` creation, and `seating_code` generation. See `allocation-algorithm.md` §25b for full implementation status. **Not yet wired to any trigger** (join/release/no-show/leave) and **not yet repeated as a loop** (`allocation-algorithm.md` §12) — both remain the next phase's work.
+
 ```
 function allocate(group, configuration):
     begin transaction
