@@ -2,7 +2,7 @@
 
 **Important rule (per governing prompt): do not fabricate AI mistakes or claim an AI agent made a suggestion unless it actually happened in a recorded session.**
 
-The three corrections below are genuine — each is a verifiable defect in the actual Session 1 output, caught during the Session 2 human review prompt (`restaurant_waitlist_phase3_review_architecture_prompt.md`) and corrected in that same session. A template for future examples follows.
+The nine corrections below are genuine — each is a verifiable defect in the actual Session 1 output, caught during the Session 2 human review prompt (`restaurant_waitlist_phase3_review_architecture_prompt.md`) and corrected in that same session. A template for future examples follows.
 
 ---
 
