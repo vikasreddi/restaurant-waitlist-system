@@ -19,7 +19,7 @@ sequenceDiagram
     A1->>DB: INSERT SeatingAssignmentTable(T1), SeatingAssignmentTable(T2)
     A1->>DB: UPDATE QueueEntry(group X): status=ready, seating_code=...
     A1->>DB: COMMIT
-    DB-->>A2: INSERT SeatingAssignmentTable(T1 or T2) violates\nUNIQUE(table_id) WHERE released_at IS NULL
+    DB-->>A2: INSERT SeatingAssignmentTable(T1 or T2) violates<br/>UNIQUE(table_id) WHERE released_at IS NULL
     A2->>DB: ROLLBACK (no partial allocation)
     DB-->>A2: Allocation failed cleanly, no state change
 ```

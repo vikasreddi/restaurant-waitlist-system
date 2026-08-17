@@ -8,20 +8,20 @@ stateDiagram-v2
     Joining --> Landing: validation error (retry)
 
     Waiting --> Waiting: position updates (re-render on change)
-    Waiting --> ReadyCodeShown: allocation service reserves a\nconfiguration (status: ready)
+    Waiting --> ReadyCodeShown: allocation service reserves a<br/>configuration (status: ready)
     Waiting --> Left: guest leaves voluntarily
     Waiting --> NoShow: staff marks no-show
 
-    ReadyCodeShown --> Seated: staff enters code, confirms\nthe existing reservation
+    ReadyCodeShown --> Seated: staff enters code, confirms<br/>the existing reservation
     ReadyCodeShown --> Left: guest leaves while ready
-    ReadyCodeShown --> NoShow: staff marks no-show, OR\n5-min timeout (DEC-015, lazy-evaluated)
+    ReadyCodeShown --> NoShow: staff marks no-show, OR<br/>5-min timeout (DEC-015, lazy-evaluated)
 
     Left --> [*]
     NoShow --> [*]
     Seated --> [*]
 
-    Landing --> Waiting: reopen page with active-visit token\n(recovers existing entry, REQ-GUEST-004)
-    Landing --> ReadyCodeShown: reopen page while ready\n(same token, recovers the code)
+    Landing --> Waiting: reopen page with active-visit token<br/>(recovers existing entry, REQ-GUEST-004)
+    Landing --> ReadyCodeShown: reopen page while ready<br/>(same token, recovers the code)
 ```
 
 Notes:

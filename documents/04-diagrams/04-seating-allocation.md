@@ -6,29 +6,29 @@ This is a global reasoning process over all currently compatible configurations 
 
 ```mermaid
 flowchart TD
-    Start(["A table/combination just became free"]) --> Compatible["Available table configurations\n→ compatible waiting groups\n(Stages 1-2)"]
+    Start(["A table/combination just became free"]) --> Compatible["Available table configurations<br/>→ compatible waiting groups<br/>(Stages 1-2)"]
 
     Compatible --> AnyCompatible{"Any compatible waiting group?"}
     AnyCompatible -->|no| Idle["Configuration stays free"]
 
     AnyCompatible -->|yes| DetermineEligible["Determine eligible allocations"]
 
-    DetermineEligible --> AnyProtected{"Apply starvation protection:\nis any eligible group\nstarvation-protected for THIS\ncomplete configuration?"}
+    DetermineEligible --> AnyProtected{"Apply starvation protection:<br/>is any eligible group<br/>starvation-protected for THIS<br/>complete configuration?"}
 
-    AnyProtected -->|yes| ProtectedWins["Protected group gets priority\nfor this configuration (Stage 5)"]
-    AnyProtected -->|no| SmallestFit["Prefer smallest suitable\navailable configuration (Stage 3)"]
+    AnyProtected -->|yes| ProtectedWins["Protected group gets priority<br/>for this configuration (Stage 5)"]
+    AnyProtected -->|no| SmallestFit["Prefer smallest suitable<br/>available configuration (Stage 3)"]
 
-    SmallestFit --> Aging["Apply waiting-time aging among\ngroups tied on fit (Stage 4)"]
+    SmallestFit --> Aging["Apply waiting-time aging among<br/>groups tied on fit (Stage 4)"]
 
     ProtectedWins --> Select["Select allocation"]
     Aging --> Select
 
-    Select --> Allocate["Atomic database transaction (Stage 6)\n(both tables or none if combined)"]
+    Select --> Allocate["Atomic database transaction (Stage 6)<br/>(both tables or none if combined)"]
 
-    Allocate --> Success{"All required tables\nstill acquirable?"}
-    Success -->|yes| Ready["Group becomes READY\n(SeatingAssignment: pending,\nseating_code generated) —\nNOT yet seated"]
-    Success -->|no, lost race| Retry["Allocation fails cleanly,\nconfiguration re-evaluated"]
-    Ready -.->|staff confirm code, separate\nlater step, see 03-staff-journey| Seated["Group seated"]
+    Allocate --> Success{"All required tables<br/>still acquirable?"}
+    Success -->|yes| Ready["Group becomes READY<br/>(SeatingAssignment: pending,<br/>seating_code generated) —<br/>NOT yet seated"]
+    Success -->|no, lost race| Retry["Allocation fails cleanly,<br/>configuration re-evaluated"]
+    Ready -.->|staff confirm code, separate<br/>later step, see 03-staff-journey| Seated["Group seated"]
 ```
 
 Critical rule reminder (`seating-allocation-policy.md` Stage 5): starvation protection only ever applies once the group's **complete** required configuration is simultaneously available — a lone free table that is only half of a protected group's need does not trigger `AnyProtected = yes`.

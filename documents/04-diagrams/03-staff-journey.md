@@ -2,25 +2,25 @@
 
 ```mermaid
 flowchart TD
-    Login["Log in (email/password stub)"] --> Dashboard["View live queue + table states\n(waiting entries + ready entries,\nDEC-015 lazy-expiration checkpoint)"]
+    Login["Log in (email/password stub)"] --> Dashboard["View live queue + table states<br/>(waiting entries + ready entries,<br/>DEC-015 lazy-expiration checkpoint)"]
 
     Dashboard --> SeatChoice{"Group's code entered"}
-    SeatChoice -->|valid, currently READY| Confirm["Confirm reservation (atomic)\nNOT an allocation decision —\nthat already happened, system-side"]
+    SeatChoice -->|valid, currently READY| Confirm["Confirm reservation (atomic)<br/>NOT an allocation decision —<br/>that already happened, system-side"]
     SeatChoice -->|invalid/used/unknown/not-ready code| RejectSeat["Reject — clear error, no state change"]
 
-    Confirm -->|success| Seated["Group seated, table(s) occupied\n(assignment pending -> active)"]
+    Confirm -->|success| Seated["Group seated, table(s) occupied<br/>(assignment pending -> active)"]
     Confirm -->|reservation expired since code was shown, DEC-015| RejectSeat
     Confirm -->|reservation released concurrently| RejectSeat
 
     Seated --> WaitForGroupToLeave["Group dines"]
-    WaitForGroupToLeave --> Release["Staff releases the group's\nseating assignment (by queue entry,\nnot a raw table id — DEC-014)"]
+    WaitForGroupToLeave --> Release["Staff releases the group's<br/>seating assignment (by queue entry,<br/>not a raw table id — DEC-014)"]
     Release --> Dashboard
 
-    Dashboard --> NoShowChoice{"Waiting or READY group\nnever arrives / confirms"}
-    NoShowChoice -->|staff marks no-show| NoShow["Entry -> no_show (terminal)\nif READY, its reservation is\nreleased in the same transaction"]
+    Dashboard --> NoShowChoice{"Waiting or READY group<br/>never arrives / confirms"}
+    NoShowChoice -->|staff marks no-show| NoShow["Entry -> no_show (terminal)<br/>if READY, its reservation is<br/>released in the same transaction"]
     NoShow --> Dashboard
 
-    Dashboard -.->|"5-min timeout on a READY entry\n(lazy — checked here, not by a\nbackground job, DEC-015)"| NoShow
+    Dashboard -.->|"5-min timeout on a READY entry<br/>(lazy — checked here, not by a<br/>background job, DEC-015)"| NoShow
 ```
 
 Notes:

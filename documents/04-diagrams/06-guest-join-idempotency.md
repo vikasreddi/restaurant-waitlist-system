@@ -11,7 +11,7 @@ sequenceDiagram
     Note over G,API: Network fails / times out before response
     G->>API: Retry — POST join (idempotency_key=UUID-A, same key reused)
     API->>DB: BEGIN TRANSACTION
-    API->>DB: INSERT queue_entries (status=waiting, idempotency_key=UUID-A, ...)\n-- single insert; idempotency_key is a unique column on this\n-- table, not a separate idempotency_records table
+    API->>DB: INSERT queue_entries (status=waiting, idempotency_key=UUID-A, ...)
 
     alt key not seen before
         DB-->>API: insert succeeded
@@ -21,7 +21,7 @@ sequenceDiagram
         DB-->>API: unique constraint conflict on idempotency_key
         API->>DB: ROLLBACK insert attempt
         API->>DB: SELECT existing queue_entry WHERE idempotency_key = UUID-A
-        API-->>G: 200 OK — same position + same active-visit token\n(no second entry created)
+        API-->>G: 200 OK — same position + same active-visit token<br/>(no second entry created)
     end
 ```
 

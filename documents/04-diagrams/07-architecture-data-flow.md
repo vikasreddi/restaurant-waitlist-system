@@ -8,34 +8,37 @@ flowchart LR
     end
 
     subgraph Backend["Rails API"]
-        JoinH["Join handler\n(validates size, idempotent)"]
-        ReadH["Position/read handler\n(also: lazy DEC-015\nexpiration checkpoint)"]
-        AllocH["Allocation service\n(system-triggered — join/release/\nno-show/leave — NEVER staff-triggered.\nwaiting -> ready, creates SeatingAssignment)"]
-        ConfirmH["Confirm handler\n(staff seat-by-code —\nready -> seated ONLY;\nnever allocates)"]
-        ReleaseH["Release handler\n(by queue_entry_id)"]
-        NoShowH["No-show handler\n(staff-initiated OR\nDEC-015 lazy expiration)"]
+        JoinH["Join handler<br/>(validates size, idempotent)"]
+        ReadH["Position/read handler<br/>(also: lazy DEC-015<br/>expiration checkpoint)"]
+        LeaveH["Leave handler<br/>(by active-visit token)"]
+        AllocH["Allocation service<br/>(system-triggered — join/release/<br/>no-show/leave — NEVER staff-triggered.<br/>waiting -> ready, creates SeatingAssignment)"]
+        ConfirmH["Confirm handler<br/>(staff seat-by-code —<br/>ready -> seated ONLY;<br/>never allocates)"]
+        ReleaseH["Release handler<br/>(by queue_entry_id)"]
+        NoShowH["No-show handler<br/>(staff-initiated OR<br/>DEC-015 lazy expiration)"]
     end
 
-    DB[("PostgreSQL — source of truth\ntables, table_adjacency, queue_entries,\nseating_assignments,\nseating_assignment_tables")]
-    Cache[("Redis — P1\nguest read path only,\nnever authoritative")]
+    DB[("PostgreSQL — source of truth<br/>tables, table_adjacency, queue_entries,<br/>seating_assignments,<br/>seating_assignment_tables")]
+    Cache[("Redis — P1<br/>guest read path only,<br/>never authoritative")]
     Worker["Sidekiq worker — P1"]
 
     GuestSPA -->|join| JoinH --> DB
-    JoinH -.->|triggers, on the event\nthat frees a configuration| AllocH --> DB
+    JoinH -.->|triggers, on the event<br/>that frees a configuration| AllocH --> DB
     GuestSPA -->|view position| ReadH
     ReadH -.->|check, P1| Cache
     ReadH --> DB
-    GuestSPA -->|leave| Backend
+    GuestSPA -->|leave| LeaveH --> DB
+    LeaveH -.->|triggers re-evaluation, if a<br/>ready reservation is released| AllocH
 
     StaffSPA -->|seat by code| ConfirmH --> DB
     StaffSPA -->|release seating assignment| ReleaseH --> DB
     ReleaseH -.->|triggers re-evaluation| AllocH
     StaffSPA -->|no-show| NoShowH --> DB
-    NoShowH -.->|triggers re-evaluation, if a\nready reservation is released| AllocH
+    NoShowH -.->|triggers re-evaluation, if a<br/>ready reservation is released| AllocH
 
     ConfirmH -.->|invalidate on write, P1| Cache
     ReleaseH -.->|invalidate on write, P1| Cache
     JoinH -.->|invalidate on write, P1| Cache
+    LeaveH -.->|invalidate on write, P1| Cache
     NoShowH -.->|invalidate on write, P1| Cache
     AllocH -.->|invalidate on write, P1| Cache
 
@@ -48,5 +51,6 @@ Notes:
 - The notification worker (Sidekiq) is only ever triggered from `ConfirmH` (the actual seating moment), off the synchronous request path (REQ-SHOW-003), and re-reads PostgreSQL at execution time rather than acting on stale embedded state.
 - `ReleaseH` takes `queue_entry_id` only — it resolves the entry's `SeatingAssignment` internally and releases it atomically (`released_at` set on the claim row(s), never deleted); there is no path that accepts a raw `table_id` (DEC-014).
 - `ReadH` is also a DEC-015 lazy-expiration checkpoint: if it touches a `ready` entry whose reservation is overdue, it expires it (→ `no_show`, releases via the same path as `NoShowH`) before returning a response — there is no separate scheduler anywhere in this diagram.
-- Redis (`Cache`) is read by `ReadH` only, and is never consulted by `JoinH`, `AllocH`, `ConfirmH`, `ReleaseH`, or `NoShowH` to decide table availability — those always go straight to PostgreSQL (DEC-013, INV-014).
+- Redis (`Cache`) is read by `ReadH` only, and is never consulted by `JoinH`, `LeaveH`, `AllocH`, `ConfirmH`, `ReleaseH`, or `NoShowH` to decide table availability — those always go straight to PostgreSQL (DEC-013, INV-014).
 - The DB box lists `seating_assignments`/`seating_assignment_tables` — replacing the earlier draft's `table_combinations`/`idempotency_records` (idempotency is a column on `queue_entries`, not a separate table; see `06-ai-working-record/ai-corrections.md` CORR-004 for the `seating_assignment_tables` correction specifically).
+- `LeaveH` is a Mermaid-rendering fix, not a new concept: an earlier version of this diagram routed the already-labeled "leave" edge directly into the `Backend` subgraph boundary instead of a handler box (the likely cause of this diagram's GitHub rendering failure) — it now terminates at a proper handler node, drawn consistently with `JoinH`/`ConfirmH`/`ReleaseH`/`NoShowH`, with the same conditional allocation-retrigger and cache-invalidation edges every other write handler already had.
