@@ -17,12 +17,15 @@ module Guest
   # expiration actually happened, never on an ordinary read of a still-valid
   # `ready`/`waiting`/terminal entry.
   #
-  # Explicitly NOT this service's job (Phase 5B.5): compatibility scoring,
-  # weighted aging, starvation scoring, table matching, or any other
-  # allocation-priority computation. `position` here is a simple chronological
-  # rank among currently-waiting entries — see #position_for below and
-  # api-spec.md's "Position semantics" note for why that's a deliberate,
-  # documented simplification, not the final allocation priority.
+  # `position` (Phase 5B.13, DEC-005): a full dynamic rank derived from the
+  # same compatibility/availability/aging/starvation policy real allocation
+  # uses — Allocation::QueuePositionCalculator, reusing Allocation::
+  # DecisionEngine verbatim. This service still never performs scoring,
+  # candidate generation, or table matching itself — it only asks the
+  # calculator for the current snapshot's rankings and looks up this one
+  # entry's position, exactly as before this phase (previously a simple
+  # chronological count; api-spec.md's own "Position semantics" note is
+  # updated to describe the corrected computation).
   class CurrentQueueStatusService
     Result = Struct.new(:outcome, :queue_entry, :position, keyword_init: true)
 
@@ -58,14 +61,8 @@ module Guest
 
     private
 
-    # Deliberately simple (Phase 5B.4 boundary): a chronological rank among
-    # entries currently `waiting`, using the existing [status, joined_at]
-    # index. Informational only — does not account for table compatibility,
-    # availability, wait-time aging weighting, or starvation protection (all
-    # deferred to the allocation service, seating-allocation-policy.md,
-    # Phase 5B.5). Never presented as a guarantee of final seating order.
     def position_for(entry)
-      QueueEntry.where(status: "waiting").where("joined_at < ?", entry.joined_at).count + 1
+      Allocation::QueuePositionCalculator.call(now: Time.current)[entry.id]
     end
   end
 end

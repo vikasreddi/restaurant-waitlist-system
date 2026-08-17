@@ -54,7 +54,7 @@ module Guest
       assert_equal 1, result.position
     end
 
-    test "position reflects chronological rank among currently-waiting entries only" do
+    test "with no table in existence at all, position falls back to chronological order among waiting entries" do
       a = create_waiting_entry(joined_at: 3.minutes.ago)
       b = create_waiting_entry(joined_at: 2.minutes.ago)
       c = create_waiting_entry(joined_at: 1.minute.ago)
@@ -62,6 +62,23 @@ module Guest
       assert_equal 1, call(a.active_visit_token).position
       assert_equal 2, call(b.active_visit_token).position
       assert_equal 3, call(c.active_visit_token).position
+    end
+
+    # DEC-011 (Phase 5B.13): position now reflects Allocation::
+    # QueuePositionCalculator (compatibility + availability + aging +
+    # starvation), not a simple joined_at count — this is what the older
+    # test above's zero-table setup coincidentally can't distinguish from.
+    test "position reflects availability, not just join order: a currently-serviceable later guest outranks an earlier one who is not" do
+      Table.create!(name: "CQ-POS-1", capacity: 2)
+
+      group_a = create_waiting_entry(joined_at: 10.minutes.ago) # group_size 2 — actually fits
+      # Make A too big for the only free table so it's not currently
+      # serviceable, while B (joined later) fits it.
+      group_a.update!(group_size: 6)
+      group_b = create_waiting_entry(joined_at: 5.minutes.ago)
+
+      assert_equal 2, call(group_a.active_visit_token).position
+      assert_equal 1, call(group_b.active_visit_token).position
     end
 
     test "a non-waiting entry does not count toward another entry's position" do
@@ -159,6 +176,19 @@ module Guest
 
       assert_equal 0, SeatingAssignment.count
       assert_equal 0, SeatingAssignmentTable.count
+    end
+
+    test "reading a waiting entry's position with a real compatible free table still creates no reservation" do
+      Table.create!(name: "CQ-POS-2", capacity: 2)
+      entry = create_waiting_entry
+
+      result = call(entry.active_visit_token)
+
+      assert_equal "waiting", result.queue_entry.status
+      assert_equal 1, result.position
+      assert_equal 0, SeatingAssignment.count
+      assert_equal 0, SeatingAssignmentTable.count
+      assert_equal "waiting", entry.reload.status
     end
   end
 end

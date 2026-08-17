@@ -37,6 +37,30 @@ module Guest
       assert_equal 1, body["position"]
     end
 
+    # DEC-011 (Phase 5B.13): position over the real HTTP endpoint reflects
+    # availability, not join order — a real free table (distinct from the
+    # setup's own claimed one) makes the smaller, later-joined group
+    # currently serviceable while the earlier, larger one is not.
+    test "position over real HTTP reflects availability: a serviceable later guest outranks a non-serviceable earlier one" do
+      # No free table yet at join time, so neither join can synchronously
+      # become ready — the table is added afterward, and this endpoint's
+      # own per-read position calculation is what's actually under test.
+      first = create_waiting_entry # group_size 2 by default — will be made too big below
+      QueueEntry.find(first["entry_id"]).update!(group_size: 6)
+      second = create_waiting_entry
+
+      Table.create!(name: "CQC-#{SecureRandom.hex(4)}", capacity: 2)
+
+      get_current(first["active_visit_token"])
+      first_position = JSON.parse(response.body)["position"]
+
+      get_current(second["active_visit_token"])
+      second_position = JSON.parse(response.body)["position"]
+
+      assert_equal 2, first_position
+      assert_equal 1, second_position
+    end
+
     test "no Authorization header returns 404, not a server error" do
       get_current(nil)
       assert_response :not_found

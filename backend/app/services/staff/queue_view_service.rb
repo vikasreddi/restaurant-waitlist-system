@@ -19,10 +19,16 @@ module Staff
   # table simply stays free until a future join or guest status read (an
   # already-approved allocation trigger) picks it up.
   #
-  # `position` here is the same simple chronological rank
-  # Guest::CurrentQueueStatusService already computes — not allocation
-  # priority. `is_starvation_protected` is an informational flag derived from
-  # the same threshold Allocation::DecisionEngine uses
+  # `position` (Phase 5B.13, DEC-005) is now the exact same dynamic rank
+  # Guest::CurrentQueueStatusService reports to the guest —
+  # Allocation::QueuePositionCalculator, the single shared source of truth
+  # for this concept (functional-spec.md §5 never distinguishes a separate
+  # staff-facing position semantics from the guest-facing one; DEC-005
+  # itself describes one unified "position," not two). The waiting list
+  # itself is now ordered by that same computed position, so what staff see
+  # is consistent with what each individual guest is told. `is_
+  # starvation_protected` is an informational flag derived from the same
+  # threshold Allocation::DecisionEngine uses
   # (Allocation::Policy::STARVATION_THRESHOLD_SECONDS) — duplicated as a
   # two-line comparison against the existing shared constant, not a second
   # implementation of the allocation algorithm itself.
@@ -50,22 +56,23 @@ module Staff
         end
       end
 
-      waiting_entries = QueueEntry.where(status: "waiting").order(:joined_at).to_a
+      positions = Allocation::QueuePositionCalculator.call(now: @now)
+      waiting_entries = QueueEntry.where(status: "waiting").to_a.sort_by { |entry| positions[entry.id] }
 
       Result.new(
-        waiting: waiting_entries.each_with_index.map { |entry, index| waiting_entry(entry, index) },
+        waiting: waiting_entries.map { |entry| waiting_entry(entry, positions[entry.id]) },
         ready: ready_entries.sort_by(&:ready_at).map { |entry| ready_entry(entry) }
       )
     end
 
     private
 
-    def waiting_entry(entry, index)
+    def waiting_entry(entry, position)
       WaitingEntry.new(
         entry_id: entry.id,
         group_size: entry.group_size,
         joined_at: entry.joined_at,
-        position: index + 1,
+        position: position,
         is_starvation_protected: starvation_protected?(entry)
       )
     end

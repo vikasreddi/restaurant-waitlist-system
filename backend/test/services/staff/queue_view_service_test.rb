@@ -32,7 +32,7 @@ module Staff
       assert_equal 1, result.waiting.first.position
     end
 
-    test "multiple waiting entries are ordered chronologically with sequential positions" do
+    test "with no free table in existence, multiple waiting entries fall back to chronological order" do
       older = create_waiting(joined_at: 20.minutes.ago)
       middle = create_waiting(joined_at: 10.minutes.ago)
       newer = create_waiting(joined_at: 1.minute.ago)
@@ -41,6 +41,23 @@ module Staff
 
       assert_equal [older.id, middle.id, newer.id], result.waiting.map(&:entry_id)
       assert_equal [1, 2, 3], result.waiting.map(&:position)
+    end
+
+    # Phase 5B.13 (DEC-005): Staff Queue now uses the exact same
+    # Allocation::QueuePositionCalculator a guest's own position is computed
+    # from — proven here by showing the SAME availability-driven ordering
+    # Guest::CurrentQueueStatusServiceTest proves at the guest-facing layer,
+    # not a separate chronological-only implementation for staff.
+    test "position reflects availability for staff too: a serviceable smaller group outranks a non-serviceable earlier larger one" do
+      Table.create!(name: "QV-POS-1", capacity: 2)
+
+      earlier_big_group = create_waiting(joined_at: 10.minutes.ago, group_size: 6)
+      later_small_group = create_waiting(joined_at: 5.minutes.ago, group_size: 2)
+
+      result = QueueViewService.call
+
+      assert_equal [later_small_group.id, earlier_big_group.id], result.waiting.map(&:entry_id)
+      assert_equal [1, 2], result.waiting.map(&:position)
     end
 
     test "a ready entry is returned with its seating_code and no allocation side effects" do
