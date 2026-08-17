@@ -14,6 +14,14 @@ module Guest
   # explicitly NOT this service's job: choosing which table/configuration
   # wins, or any part of the scoring/reservation logic itself — that's
   # entirely Allocation::DecisionEngine/ReservationService, called as-is.
+  #
+  # DEC-011 (Phase 5B.12): a group size that no valid single table or allowed
+  # adjacent pair could EVER seat is rejected here, before any QueueEntry is
+  # created — checked against Allocation::ConfigurationGenerator.
+  # maximum_seatable_group_size (the one source of truth for what a "valid
+  # configuration" is), never against current availability. A group that
+  # merely can't be seated *right now* (every suitable table is occupied) is
+  # not impossible — it stays eligible for `waiting`, exactly as before.
   class JoinService
     Result = Struct.new(:outcome, :queue_entry, :errors, keyword_init: true)
 
@@ -36,10 +44,21 @@ module Guest
       existing = @idempotency_key.present? ? QueueEntry.find_by(idempotency_key: @idempotency_key) : nil
       return resolve_existing(existing) if existing
 
+      return Result.new(outcome: :group_size_too_large) if group_size_too_large?
+
       create_new_entry
     end
 
     private
+
+    # A non-positive or non-numeric group_size is left to the existing
+    # QueueEntry model validation (`group_size > 0`) below, unchanged — this
+    # check only ever fires for a syntactically valid positive integer that
+    # is still too large for any configuration to ever seat.
+    def group_size_too_large?
+      size = @group_size.to_i
+      size.positive? && size > Allocation::ConfigurationGenerator.maximum_seatable_group_size
+    end
 
     def create_new_entry
       entry = QueueEntry.create!(

@@ -12,17 +12,34 @@ module Allocation
   # pair by construction, and it is only ever read here, never written.
   class ConfigurationGenerator
     def self.call
-      new.call
+      new(tables: Table.order(:id).select(&:free?)).call
+    end
+
+    # DEC-011 (Phase 5B.12) — the maximum group size any valid configuration
+    # (a single table, or an allowed adjacent pair) could EVER seat,
+    # regardless of current availability. Deliberately computed over EVERY
+    # table, not just free ones — occupancy is irrelevant to whether a
+    # configuration structurally exists (this phase's own explicit
+    # distinction: "do NOT reject a group merely because tables are
+    # currently occupied"). Reuses the exact same single/combined
+    # enumeration #call already performs for real allocation, just against a
+    # different table scope — one source of truth for what a "valid
+    # configuration" is, never a second algorithm.
+    def self.maximum_seatable_group_size
+      new(tables: Table.order(:id).to_a).call.map(&:capacity).max || 0
+    end
+
+    def initialize(tables:)
+      @tables = tables
     end
 
     def call
-      free_tables = Table.order(:id).select(&:free?)
-      free_table_ids = free_tables.map(&:id).to_set
+      table_ids = @tables.map(&:id).to_set
 
-      configurations = free_tables.map { |table| TableConfiguration.single(table) }
+      configurations = @tables.map { |table| TableConfiguration.single(table) }
 
       TableAdjacency.includes(:table, :adjacent_table).find_each do |adjacency|
-        next unless free_table_ids.include?(adjacency.table_id) && free_table_ids.include?(adjacency.adjacent_table_id)
+        next unless table_ids.include?(adjacency.table_id) && table_ids.include?(adjacency.adjacent_table_id)
 
         configurations << TableConfiguration.combined(adjacency.table, adjacency.adjacent_table)
       end

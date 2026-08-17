@@ -88,5 +88,43 @@ module Allocation
 
       assert configurations.all? { |c| c.table_count <= 2 }
     end
+
+    # --- maximum_seatable_group_size (DEC-011, Phase 5B.12) ---
+
+    test "maximum_seatable_group_size with no tables at all is 0" do
+      assert_equal 0, ConfigurationGenerator.maximum_seatable_group_size
+    end
+
+    test "maximum_seatable_group_size is the largest single-table capacity when no adjacency beats it" do
+      Table.create!(name: "MAX-1", capacity: 2)
+      Table.create!(name: "MAX-2", capacity: 6)
+
+      assert_equal 6, ConfigurationGenerator.maximum_seatable_group_size
+    end
+
+    test "maximum_seatable_group_size is the largest combined-pair capacity when it beats every single table" do
+      t1 = Table.create!(name: "MAX-A1", capacity: 4)
+      t2 = Table.create!(name: "MAX-A2", capacity: 4)
+      TableAdjacency.pair!(t1, t2)
+      Table.create!(name: "MAX-SOLO", capacity: 6)
+
+      assert_equal 8, ConfigurationGenerator.maximum_seatable_group_size
+    end
+
+    test "maximum_seatable_group_size is unaffected by current occupancy — occupied tables still count" do
+      t1 = Table.create!(name: "MAX-B1", capacity: 4)
+      t2 = Table.create!(name: "MAX-B2", capacity: 4)
+      TableAdjacency.pair!(t1, t2)
+      claim_table!(t1)
+      claim_table!(t2)
+
+      # Both members of the pair are occupied — ConfigurationGenerator.call
+      # (free tables only) would offer nothing for this pair — but the
+      # structural maximum must still reflect it: occupancy is irrelevant to
+      # whether a configuration could ever seat a group (this task's own
+      # explicit "do NOT reject merely because tables are occupied").
+      assert_equal 8, ConfigurationGenerator.maximum_seatable_group_size
+      assert_equal 0, ConfigurationGenerator.call.count { |c| c.table_count == 2 }
+    end
   end
 end

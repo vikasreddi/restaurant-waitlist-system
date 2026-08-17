@@ -2,6 +2,22 @@ require "test_helper"
 
 module Guest
   class JoinServiceTest < ActiveSupport::TestCase
+    # DEC-011 (Phase 5B.12): every group_size used by this file's tests (max
+    # 6) must be seatable by SOME valid configuration, or the new too-large
+    # check would reject them before ever reaching the behavior under test.
+    # This table is immediately claimed (non-free) rather than left free, so
+    # Allocation::Orchestrator still can never actually allocate it —
+    # preserving every existing "stays waiting / no SeatingAssignment
+    # created" assertion below exactly as before. Mirrors
+    # allocation/configuration_generator_test.rb's own claim_table! helper.
+    setup do
+      table = Table.create!(name: "JS-#{SecureRandom.hex(4)}", capacity: 10)
+      claimer = QueueEntry.create!(group_size: 2, phone_number: "555-0199", idempotency_key: SecureRandom.uuid)
+      claimer.update!(status: "ready", ready_at: Time.current, seating_code: SecureRandom.hex(4))
+      assignment = SeatingAssignment.create!(queue_entry: claimer, status: "pending")
+      SeatingAssignmentTable.create!(seating_assignment: assignment, table: table)
+    end
+
     def call(overrides = {})
       defaults = { group_size: 2, phone_number: "555-0100", idempotency_key: SecureRandom.uuid }
       JoinService.call(**defaults.merge(overrides))
@@ -129,11 +145,96 @@ module Guest
     # --- No allocation happens here (this phase's core boundary) ---
 
     test "a successful join creates no SeatingAssignment and no SeatingAssignmentTable" do
-      result = call
+      # Delta-based, not an absolute 0 — this file's own setup already
+      # claims one table (non-free, so the join itself still can't
+      # allocate), so a bare global count is no longer a valid assumption.
+      result = nil
+      assert_no_difference [ "SeatingAssignment.count", "SeatingAssignmentTable.count" ] do
+        result = call
+      end
 
       assert_equal "waiting", result.queue_entry.status
       assert_equal 0, result.queue_entry.seating_assignments.count
-      assert_equal 0, SeatingAssignmentTable.count
+    end
+
+    # --- DEC-011: oversized-group rejection (Phase 5B.12) ---
+    # This file's own setup claims a single capacity-10 table (non-free) —
+    # so Allocation::ConfigurationGenerator.maximum_seatable_group_size is
+    # exactly 10 for every test below, and that table can never itself
+    # satisfy a real allocation (it's occupied), which is exactly what makes
+    # the "valid but currently unavailable" test below meaningful.
+
+    test "a group at the exact maximum valid size is accepted" do
+      result = call(group_size: 10)
+
+      assert_equal :created, result.outcome
+      assert_equal "waiting", result.queue_entry.status
+    end
+
+    test "a group one larger than the maximum valid size is rejected" do
+      result = call(group_size: 11)
+      assert_equal :group_size_too_large, result.outcome
+    end
+
+    test "an impossible group creates no QueueEntry" do
+      assert_no_difference "QueueEntry.count" do
+        call(group_size: 11)
+      end
+    end
+
+    test "an impossible group creates no SeatingAssignment or SeatingAssignmentTable" do
+      assert_no_difference [ "SeatingAssignment.count", "SeatingAssignmentTable.count" ] do
+        call(group_size: 11)
+      end
+    end
+
+    test "an impossible group does not trigger allocation for anyone else waiting" do
+      other_waiting = QueueEntry.create!(group_size: 2, phone_number: "555-0300", idempotency_key: SecureRandom.uuid)
+
+      call(group_size: 11)
+
+      assert_equal "waiting", other_waiting.reload.status
+    end
+
+    test "a valid-sized group with no currently-available table is NOT rejected as impossible" do
+      # group_size: 10 exactly matches the maximum, but the only capacity-10
+      # table in this file's fixture is claimed (non-free) — this must stay
+      # a normal waiting join, never the impossible-group rejection.
+      result = call(group_size: 10)
+
+      assert_equal :created, result.outcome
+      refute_equal :group_size_too_large, result.outcome
+    end
+
+    test "an impossible request remains rejected on retry with the same idempotency_key" do
+      key = SecureRandom.uuid
+
+      first = call(group_size: 11, idempotency_key: key)
+      second = call(group_size: 11, idempotency_key: key)
+
+      assert_equal :group_size_too_large, first.outcome
+      assert_equal :group_size_too_large, second.outcome
+      assert_equal 0, QueueEntry.where(idempotency_key: key).count
+    end
+
+    test "an impossible request never becomes a successful idempotent replay on retry" do
+      key = SecureRandom.uuid
+
+      call(group_size: 11, idempotency_key: key)
+      retry_result = call(group_size: 11, idempotency_key: key)
+
+      assert_not_equal :idempotent_replay, retry_result.outcome
+      assert_nil retry_result.queue_entry
+    end
+
+    test "a malformed (zero) group_size is still a plain validation_error, not the impossible-group outcome" do
+      result = call(group_size: 0)
+      assert_equal :validation_error, result.outcome
+    end
+
+    test "a negative group_size is still a plain validation_error, not the impossible-group outcome" do
+      result = call(group_size: -5)
+      assert_equal :validation_error, result.outcome
     end
   end
 end

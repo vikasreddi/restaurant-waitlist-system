@@ -11,6 +11,16 @@ module Guest
     self.use_transactional_tests = false
 
     test "two concurrent join requests with the same idempotency key produce exactly one QueueEntry" do
+      # DEC-011 (Phase 5B.12): group_size 2 must be seatable by some valid
+      # configuration. use_transactional_tests is false here, so this table
+      # (and its claim) must be cleaned up manually below, like the
+      # QueueEntry rows already are.
+      table = Table.create!(name: "JC-#{SecureRandom.hex(4)}", capacity: 10)
+      claimer = QueueEntry.create!(group_size: 2, phone_number: "555-0199", idempotency_key: SecureRandom.uuid)
+      claimer.update!(status: "ready", ready_at: Time.current, seating_code: SecureRandom.hex(4))
+      claim_assignment = SeatingAssignment.create!(queue_entry: claimer, status: "pending")
+      SeatingAssignmentTable.create!(seating_assignment: claim_assignment, table: table)
+
       key = SecureRandom.uuid
       ready = Queue.new
       go = Queue.new
@@ -50,6 +60,10 @@ module Guest
       assert_equal [:created, :idempotent_replay], results.map(&:outcome).sort_by(&:to_s)
     ensure
       QueueEntry.where(idempotency_key: key).delete_all
+      SeatingAssignmentTable.where(seating_assignment_id: claim_assignment&.id).delete_all
+      claim_assignment&.destroy
+      claimer&.destroy
+      table&.destroy
     end
   end
 end

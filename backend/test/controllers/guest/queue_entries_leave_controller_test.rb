@@ -2,6 +2,18 @@ require "test_helper"
 
 module Guest
   class QueueEntriesLeaveControllerTest < ActionDispatch::IntegrationTest
+    # DEC-011 (Phase 5B.12): group_size 2 must be seatable by some valid
+    # configuration, or the join helper below would be rejected before ever
+    # reaching leave behavior. Claimed (non-free) so it doesn't turn any of
+    # these entries synchronously `ready` on its own.
+    setup do
+      table = Table.create!(name: "QL-#{SecureRandom.hex(4)}", capacity: 10)
+      claimer = QueueEntry.create!(group_size: 2, phone_number: "555-0199", idempotency_key: SecureRandom.uuid)
+      claimer.update!(status: "ready", ready_at: Time.current, seating_code: SecureRandom.hex(4))
+      assignment = SeatingAssignment.create!(queue_entry: claimer, status: "pending")
+      SeatingAssignmentTable.create!(seating_assignment: assignment, table: table)
+    end
+
     def post_join(overrides = {})
       body = { group_size: 2, phone_number: "555-0100", idempotency_key: SecureRandom.uuid }.merge(overrides)
       post "/guest/queue-entries", params: body, as: :json

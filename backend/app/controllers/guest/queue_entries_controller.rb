@@ -25,6 +25,11 @@ module Guest
           "Invalid join request.",
           result.errors.to_hash(true)
         ), status: :unprocessable_content
+      when :group_size_too_large
+        render json: error_json(
+          "validation_error",
+          "This group size cannot be accommodated by any table configuration. Please speak to staff directly."
+        ), status: :unprocessable_content
       end
     end
 

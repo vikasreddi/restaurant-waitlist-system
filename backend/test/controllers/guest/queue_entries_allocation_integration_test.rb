@@ -10,7 +10,19 @@ module Guest
       post "/guest/queue-entries", params: body, as: :json
     end
 
-    test "join with no compatible table returns 201 and the entry remains waiting" do
+    # DEC-011 (Phase 5B.12): "no compatible table right now" (this test) is
+    # deliberately distinct from "no configuration could EVER seat this
+    # group" — the former stays a normal 201/waiting join; only the latter
+    # is rejected (see queue_entries_controller_group_size_test.rb). A
+    # capacity-matching but currently-claimed (non-free) table is used here
+    # so the join is genuinely valid, just not servable this instant.
+    test "join with no currently-available compatible table returns 201 and the entry remains waiting" do
+      table = Table.create!(name: "AJ-0", capacity: 2)
+      claimer = QueueEntry.create!(group_size: 2, phone_number: "555-0199", idempotency_key: SecureRandom.uuid)
+      claimer.update!(status: "ready", ready_at: Time.current, seating_code: SecureRandom.hex(4))
+      assignment = SeatingAssignment.create!(queue_entry: claimer, status: "pending")
+      SeatingAssignmentTable.create!(seating_assignment: assignment, table: table)
+
       post_join
 
       assert_response :created

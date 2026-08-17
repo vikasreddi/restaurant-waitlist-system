@@ -2,6 +2,18 @@ require "test_helper"
 
 module Guest
   class CurrentQueueStatusControllerTest < ActionDispatch::IntegrationTest
+    # DEC-011 (Phase 5B.12): group_size 2 must be seatable by some valid
+    # configuration, or the join helpers below would be rejected before
+    # ever reaching the behavior under test. Claimed (non-free) so it
+    # doesn't turn any of these entries synchronously `ready`.
+    setup do
+      table = Table.create!(name: "CQ-#{SecureRandom.hex(4)}", capacity: 10)
+      claimer = QueueEntry.create!(group_size: 2, phone_number: "555-0199", idempotency_key: SecureRandom.uuid)
+      claimer.update!(status: "ready", ready_at: Time.current, seating_code: SecureRandom.hex(4))
+      assignment = SeatingAssignment.create!(queue_entry: claimer, status: "pending")
+      SeatingAssignmentTable.create!(seating_assignment: assignment, table: table)
+    end
+
     def get_current(token)
       headers = token ? { "Authorization" => "Bearer #{token}" } : {}
       get "/guest/queue-entries/current", headers: headers, as: :json
@@ -80,11 +92,10 @@ module Guest
     test "no side effects from a read: SeatingAssignment/SeatingAssignmentTable counts are unchanged" do
       joined = create_waiting_entry
 
-      get_current(joined["active_visit_token"])
-      get_current(joined["active_visit_token"])
-
-      assert_equal 0, SeatingAssignment.count
-      assert_equal 0, SeatingAssignmentTable.count
+      assert_no_difference [ "SeatingAssignment.count", "SeatingAssignmentTable.count" ] do
+        get_current(joined["active_visit_token"])
+        get_current(joined["active_visit_token"])
+      end
     end
   end
 end

@@ -2,6 +2,17 @@ require "test_helper"
 
 module Guest
   class QueueEntriesControllerTest < ActionDispatch::IntegrationTest
+    # DEC-011 (Phase 5B.12): every group_size used below (max 6) must be
+    # seatable by some valid configuration. Claimed (non-free) so the
+    # allocation-boundary assertions below are unaffected.
+    setup do
+      table = Table.create!(name: "QC-#{SecureRandom.hex(4)}", capacity: 10)
+      claimer = QueueEntry.create!(group_size: 2, phone_number: "555-0199", idempotency_key: SecureRandom.uuid)
+      claimer.update!(status: "ready", ready_at: Time.current, seating_code: SecureRandom.hex(4))
+      assignment = SeatingAssignment.create!(queue_entry: claimer, status: "pending")
+      SeatingAssignmentTable.create!(seating_assignment: assignment, table: table)
+    end
+
     def post_join(overrides = {})
       body = { group_size: 2, phone_number: "555-0100", idempotency_key: SecureRandom.uuid }.merge(overrides)
       post "/guest/queue-entries", params: body, as: :json
@@ -74,6 +85,32 @@ module Guest
       entry_id = JSON.parse(response.body)["entry_id"]
 
       assert_equal 0, QueueEntry.find(entry_id).seating_assignments.count
+    end
+
+    # --- DEC-011: oversized-group rejection over real HTTP (Phase 5B.12) ---
+    # This file's own setup claims a capacity-10 table, so the maximum valid
+    # group size is exactly 10 for every test below.
+
+    test "a group size beyond the maximum valid configuration returns 422 validation_error" do
+      post_join(group_size: 11)
+
+      assert_response :unprocessable_content
+      body = JSON.parse(response.body)
+      assert_equal "validation_error", body["error"]["type"]
+      assert body["error"]["message"].present?
+    end
+
+    test "an impossible group size creates no QueueEntry" do
+      assert_no_difference "QueueEntry.count" do
+        post_join(group_size: 11)
+      end
+    end
+
+    test "a much larger impossible group size is also rejected with no QueueEntry created" do
+      assert_no_difference "QueueEntry.count" do
+        post_join(group_size: 500)
+      end
+      assert_response :unprocessable_content
     end
   end
 end
