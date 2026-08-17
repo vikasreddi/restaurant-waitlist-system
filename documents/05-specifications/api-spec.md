@@ -136,11 +136,30 @@ Status: specification only. Exact route paths/verbs are illustrative for a Rails
 
 **Idempotent:** releasing an already-released entry returns 200 with no state change, not an error.
 
+**Response `not_found`:** unknown `entry_id`.
+
+**Response `conflict`:** the entry exists but is not currently `seated` (e.g. still `waiting`/`ready`, or `left`/`no_show`) — there is nothing to release.
+
+**Implementation status (Phase 5B.11, `Staff::ReleaseService` / `Staff::ReleaseController`):**
+- Implemented now: entry-only lookup (never `table_id`), the entry's own `current_seating_assignment` locked and released atomically (`status → released`, every `SeatingAssignmentTable` row's `released_at` set — 1 or 2 rows together, never partially), `Allocation::Orchestrator` invoked strictly after commit, only when a table was actually released.
+- **`QueueEntry.status` is deliberately left unchanged by release — it stays `seated`.** `domain-model.md` §2 already documents this explicitly ("the entry stays `seated` as the historical record; the *assignment* and its table(s) transition instead") — there is no `released` value in `QueueEntry::STATUSES`, and this response's own shape (`{ entry_id, table_ids_released }`, no `status` field) is consistent with that: if the entry's status were expected to change, the response would report the new value, the way every other state-changing endpoint in this document does.
+- Staff frontend: a "Release" action on each `occupied` row in the Staff Tables view (using that row's own `current_queue_entry_id`) — the smallest-footprint location, since that field already exists there for exactly this purpose.
+
 ### `POST /staff/queue/no-show` — Mark no-show
 
 **Request:** `{ entry_id }`
 
 **Response 200:** `{ entry_id, status: "no_show" }`. Idempotent against an already-terminal entry.
+
+**Response `not_found`:** unknown `entry_id`.
+
+**Response `conflict`:** the entry is `seated` or `left` — no-show only ever applies to a currently active waitlist position (`waiting` or `ready`).
+
+**Implementation status (Phase 5B.11, `Staff::NoShowService` / `Staff::NoShowController`):**
+- Implemented now: `waiting → no_show` (nothing to release); `ready → no_show` with its `pending` `SeatingAssignment` released atomically (both/all `SeatingAssignmentTable` rows together), mirroring `Guest::LeaveService`'s exact release pattern; `Allocation::Orchestrator` invoked strictly after commit, only when a table was actually released. A `no_show` entry can never later be seated — `Staff::ConfirmSeatingService#classify` already rejects `left`/`no_show` codes as `conflict` (Phase 5B.6), and `no_show` is terminal, so no additional enforcement was needed.
+- Staff frontend: a "No-show" action on every `waiting`/`ready` row in the Staff Queue view.
+
+**Staff Seat by code — frontend completed (Phase 5B.11):** `POST /staff/seat` itself is unchanged (Phase 5B.6/5B.7) — this phase adds the missing UI: a standalone seating-code entry ("Seat Guest") plus a per-row "Seat" button on each `ready` Staff Queue entry, both calling the real endpoint. Never runs allocation; only confirms an already-made reservation.
 
 ## P1-only surface (not built until P0 stable)
 

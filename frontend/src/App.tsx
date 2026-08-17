@@ -95,6 +95,26 @@ async function parseJson(response: Response): Promise<unknown> {
   }
 }
 
+interface SeatResponse {
+  entry_id: number
+  status: 'seated'
+  table_ids: number[]
+}
+
+// Shared by StaffSeatPanel's manual-entry form and StaffQueue's per-row
+// "Seat" button — a single real POST /staff/seat implementation reused by
+// both call sites (api-spec.md, already implemented/authenticated on the
+// backend; this task only adds the missing frontend UI for it). Never
+// fabricates success — the caller only shows "seated" after this returns ok.
+async function seatByCode(token: string, seatingCode: string): Promise<{ status: number; body: unknown }> {
+  const response = await fetch(`${BACKEND_URL}/staff/seat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ seating_code: seatingCode }),
+  })
+  return { status: response.status, body: await parseJson(response) }
+}
+
 function GuestJoin() {
   const [groupSize, setGroupSize] = useState(2)
   const [phoneNumber, setPhoneNumber] = useState('')
@@ -345,18 +365,127 @@ type StaffScreen =
   | { phase: 'authenticated'; email: string; token: string }
   | { phase: 'error'; message: string }
 
+// P0 — completes the existing POST /staff/seat capability with the missing
+// Staff UI (the backend/auth/service logic already existed and is
+// unmodified by this task). A standalone manual seating_code entry — staff
+// key in whatever code a guest presents, independent of whether that guest
+// happens to be visible in the current Queue list. Never runs allocation:
+// this only confirms an already-made reservation (functional-spec.md §6a).
+function StaffSeatPanel({
+  token,
+  onUnauthorized,
+  onSeated,
+}: {
+  token: string
+  onUnauthorized: () => void
+  onSeated: () => void
+}) {
+  const [code, setCode] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    setIsSubmitting(true)
+    setError(null)
+    setMessage(null)
+
+    try {
+      const { status, body } = await seatByCode(token, code)
+
+      if (status === 401) {
+        onUnauthorized()
+        return
+      }
+
+      if (status !== 200) {
+        const apiMessage = (body as ApiErrorBody | null)?.error?.message
+        setError(apiMessage ?? `Could not seat guest (HTTP ${status}).`)
+        return
+      }
+
+      const seated = body as SeatResponse
+      setMessage(`Seated entry #${seated.entry_id}.`)
+      setCode('')
+      onSeated()
+    } catch {
+      setError('Could not reach the server. Check your connection and try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid #ccc' }}>
+      <h2>Seat Guest</h2>
+      <form onSubmit={handleSubmit}>
+        <label htmlFor="seating-code">Seating Code</label>
+        <br />
+        <input
+          id="seating-code"
+          type="text"
+          required
+          value={code}
+          disabled={isSubmitting}
+          onChange={(event) => setCode(event.target.value)}
+        />{' '}
+        <button type="submit" disabled={isSubmitting}>
+          {isSubmitting ? 'Seating…' : 'Seat'}
+        </button>
+      </form>
+      {message && <p>{message}</p>}
+      {error && (
+        <p role="alert" style={{ color: '#b00020' }}>
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
 type QueueScreen =
   | { phase: 'loading' }
   | { phase: 'loaded'; data: StaffQueueResponse }
   | { phase: 'error'; message: string }
 
-// P0 REQ-STAFF-002 — a read-only view of GET /staff/queue, shown after Staff
-// Login. Fetches once on mount using the real session token (never a mocked
-// response). No Staff Table/Release/No-show UI, no live updates (P1) — a
-// manual "Refresh" re-fetch is the only way to see updated state, matching
-// this project's existing "no polling/streaming in P0" boundary.
-function StaffQueue({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
+interface NoShowResponse {
+  entry_id: number
+  status: 'no_show'
+}
+
+async function markNoShow(token: string, entryId: number): Promise<{ status: number; body: unknown }> {
+  const response = await fetch(`${BACKEND_URL}/staff/queue/no-show`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ entry_id: entryId }),
+  })
+  return { status: response.status, body: await parseJson(response) }
+}
+
+// P0 REQ-STAFF-002 — a read-only-plus-actions view of GET /staff/queue,
+// shown after Staff Login. Fetches on mount and whenever `refreshSignal`
+// changes (bumped by the parent after any Seat/Release/No-show action
+// completes anywhere in the Staff UI, including from outside this
+// component) using the real session token — never a mocked response. No
+// Staff Table/Release UI here (Release lives on the Tables view, next to
+// the OCCUPIED rows it applies to), no live updates (P1) — a manual
+// "Refresh" re-fetch is also still available.
+function StaffQueue({
+  token,
+  onUnauthorized,
+  refreshSignal,
+  onActionComplete,
+}: {
+  token: string
+  onUnauthorized: () => void
+  refreshSignal: number
+  onActionComplete: () => void
+}) {
   const [screen, setScreen] = useState<QueueScreen>({ phase: 'loading' })
+  const [actionEntryId, setActionEntryId] = useState<number | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   // This fetch doubles as the real backend validation of a restored Staff
   // session (no whoami endpoint exists, and this task's own scope forbids
@@ -391,7 +520,64 @@ function StaffQueue({ token, onUnauthorized }: { token: string; onUnauthorized: 
 
   useEffect(() => {
     load()
-  }, [load])
+  }, [load, refreshSignal])
+
+  async function handleSeat(entryId: number, seatingCode: string) {
+    setActionEntryId(entryId)
+    setActionMessage(null)
+    setActionError(null)
+    try {
+      const { status, body } = await seatByCode(token, seatingCode)
+
+      if (status === 401) {
+        onUnauthorized()
+        return
+      }
+
+      if (status !== 200) {
+        const apiMessage = (body as ApiErrorBody | null)?.error?.message
+        setActionError(apiMessage ?? `Could not seat guest (HTTP ${status}).`)
+        return
+      }
+
+      setActionMessage(`Seated entry #${entryId}.`)
+      onActionComplete()
+      load()
+    } catch {
+      setActionError('Could not reach the server. Check your connection and try again.')
+    } finally {
+      setActionEntryId(null)
+    }
+  }
+
+  async function handleNoShow(entryId: number) {
+    setActionEntryId(entryId)
+    setActionMessage(null)
+    setActionError(null)
+    try {
+      const { status, body } = await markNoShow(token, entryId)
+
+      if (status === 401) {
+        onUnauthorized()
+        return
+      }
+
+      if (status !== 200) {
+        const apiMessage = (body as ApiErrorBody | null)?.error?.message
+        setActionError(apiMessage ?? `Could not mark no-show (HTTP ${status}).`)
+        return
+      }
+
+      const result = body as NoShowResponse
+      setActionMessage(`Entry #${result.entry_id} marked no-show.`)
+      onActionComplete()
+      load()
+    } catch {
+      setActionError('Could not reach the server. Check your connection and try again.')
+    } finally {
+      setActionEntryId(null)
+    }
+  }
 
   if (screen.phase === 'loading') {
     return <p>Loading queue…</p>
@@ -419,6 +605,13 @@ function StaffQueue({ token, onUnauthorized }: { token: string; onUnauthorized: 
         Refresh
       </button>
 
+      {actionMessage && <p>{actionMessage}</p>}
+      {actionError && (
+        <p role="alert" style={{ color: '#b00020' }}>
+          {actionError}
+        </p>
+      )}
+
       {isEmpty && <p>The queue is empty.</p>}
 
       {!isEmpty && (
@@ -431,7 +624,14 @@ function StaffQueue({ token, onUnauthorized }: { token: string; onUnauthorized: 
               {waiting.map((entry) => (
                 <li key={entry.entry_id}>
                   #{entry.position} — Group of {entry.group_size}
-                  {entry.is_starvation_protected ? ' (priority)' : ''}
+                  {entry.is_starvation_protected ? ' (priority)' : ''}{' '}
+                  <button
+                    type="button"
+                    onClick={() => handleNoShow(entry.entry_id)}
+                    disabled={actionEntryId === entry.entry_id}
+                  >
+                    No-show
+                  </button>
                 </li>
               ))}
             </ul>
@@ -444,7 +644,21 @@ function StaffQueue({ token, onUnauthorized }: { token: string; onUnauthorized: 
             <ul>
               {ready.map((entry) => (
                 <li key={entry.entry_id}>
-                  Group of {entry.group_size} — code {entry.seating_code}
+                  Group of {entry.group_size} — code {entry.seating_code}{' '}
+                  <button
+                    type="button"
+                    onClick={() => handleSeat(entry.entry_id, entry.seating_code)}
+                    disabled={actionEntryId === entry.entry_id}
+                  >
+                    Seat
+                  </button>{' '}
+                  <button
+                    type="button"
+                    onClick={() => handleNoShow(entry.entry_id)}
+                    disabled={actionEntryId === entry.entry_id}
+                  >
+                    No-show
+                  </button>
                 </li>
               ))}
             </ul>
@@ -460,12 +674,45 @@ type TableScreen =
   | { phase: 'loaded'; data: StaffTablesResponse }
   | { phase: 'error'; message: string }
 
-// P0 REQ-STAFF-003 — a read-only view of GET /staff/tables, shown after
-// Staff Login alongside Staff Queue. Same fetch-on-mount + manual "Refresh"
-// pattern as StaffQueue (no live updates, P1); a 401 here is the real
-// backend validation of a restored Staff session, same as StaffQueue's own.
-function StaffTables({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
+interface ReleaseResponse {
+  entry_id: number
+  table_ids_released: number[]
+}
+
+async function releaseSeating(token: string, entryId: number): Promise<{ status: number; body: unknown }> {
+  const response = await fetch(`${BACKEND_URL}/staff/seating-assignments/release`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ entry_id: entryId }),
+  })
+  return { status: response.status, body: await parseJson(response) }
+}
+
+// P0 REQ-STAFF-003 — a view of GET /staff/tables, shown after Staff Login
+// alongside Staff Queue. Fetches on mount and whenever `refreshSignal`
+// changes (bumped after any Seat/Release/No-show action anywhere in the
+// Staff UI); a 401 here is the real backend validation of a restored Staff
+// session, same as StaffQueue's own. An OCCUPIED table already carries its
+// own `current_queue_entry_id` (api-spec.md), which is exactly what
+// POST /staff/seating-assignments/release needs — DEC-014/INV-015 mean
+// release is always by entry, never by table_id, so this button never sends
+// a raw table_id anywhere. Occupancy itself is never represented from local
+// state — every row always reflects the last real fetch.
+function StaffTables({
+  token,
+  onUnauthorized,
+  refreshSignal,
+  onActionComplete,
+}: {
+  token: string
+  onUnauthorized: () => void
+  refreshSignal: number
+  onActionComplete: () => void
+}) {
   const [screen, setScreen] = useState<TableScreen>({ phase: 'loading' })
+  const [actionEntryId, setActionEntryId] = useState<number | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setScreen({ phase: 'loading' })
@@ -495,7 +742,36 @@ function StaffTables({ token, onUnauthorized }: { token: string; onUnauthorized:
 
   useEffect(() => {
     load()
-  }, [load])
+  }, [load, refreshSignal])
+
+  async function handleRelease(entryId: number) {
+    setActionEntryId(entryId)
+    setActionMessage(null)
+    setActionError(null)
+    try {
+      const { status, body } = await releaseSeating(token, entryId)
+
+      if (status === 401) {
+        onUnauthorized()
+        return
+      }
+
+      if (status !== 200) {
+        const apiMessage = (body as ApiErrorBody | null)?.error?.message
+        setActionError(apiMessage ?? `Could not release table (HTTP ${status}).`)
+        return
+      }
+
+      const result = body as ReleaseResponse
+      setActionMessage(`Released table(s) ${result.table_ids_released.join(', ')}.`)
+      onActionComplete()
+      load()
+    } catch {
+      setActionError('Could not reach the server. Check your connection and try again.')
+    } finally {
+      setActionEntryId(null)
+    }
+  }
 
   if (screen.phase === 'loading') {
     return <p>Loading tables…</p>
@@ -522,6 +798,13 @@ function StaffTables({ token, onUnauthorized }: { token: string; onUnauthorized:
         Refresh
       </button>
 
+      {actionMessage && <p>{actionMessage}</p>}
+      {actionError && (
+        <p role="alert" style={{ color: '#b00020' }}>
+          {actionError}
+        </p>
+      )}
+
       {tables.length === 0 ? (
         <p>No tables found.</p>
       ) : (
@@ -529,6 +812,18 @@ function StaffTables({ token, onUnauthorized }: { token: string; onUnauthorized:
           {tables.map((table) => (
             <li key={table.table_id}>
               Table {table.table_id} — {table.capacity} seats — {table.status.toUpperCase()}
+              {table.status === 'occupied' && table.current_queue_entry_id !== undefined && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    onClick={() => handleRelease(table.current_queue_entry_id as number)}
+                    disabled={actionEntryId === table.current_queue_entry_id}
+                  >
+                    Release
+                  </button>
+                </>
+              )}
             </li>
           ))}
         </ul>
@@ -552,6 +847,13 @@ function StaffLogin() {
     return stored ? { phase: 'authenticated', email: stored.email, token: stored.token } : { phase: 'form' }
   })
   const [staffView, setStaffView] = useState<'queue' | 'tables'>('queue')
+  // Bumped after any Seat/Release/No-show action completes anywhere in the
+  // Staff UI (StaffSeatPanel, or a row action inside StaffQueue/StaffTables)
+  // so that whichever of Queue/Tables is currently visible re-fetches real
+  // data — "refresh Queue/Tables from the real backend" without a state-
+  // management library or lifting the queue/table data itself up here.
+  const [refreshSignal, setRefreshSignal] = useState(0)
+  const bumpRefresh = () => setRefreshSignal((n) => n + 1)
 
   const isLoading = screen.phase === 'loading'
 
@@ -613,7 +915,9 @@ function StaffLogin() {
           Log Out
         </button>
 
-        <nav style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>
+        <StaffSeatPanel token={screen.token} onUnauthorized={handleUnauthorized} onSeated={bumpRefresh} />
+
+        <nav style={{ marginBottom: '1rem' }}>
           <button type="button" onClick={() => setStaffView('queue')} disabled={staffView === 'queue'}>
             Queue
           </button>{' '}
@@ -624,9 +928,19 @@ function StaffLogin() {
 
         <h2>{staffView === 'queue' ? 'Staff Queue' : 'Staff Tables'}</h2>
         {staffView === 'queue' ? (
-          <StaffQueue token={screen.token} onUnauthorized={handleUnauthorized} />
+          <StaffQueue
+            token={screen.token}
+            onUnauthorized={handleUnauthorized}
+            refreshSignal={refreshSignal}
+            onActionComplete={bumpRefresh}
+          />
         ) : (
-          <StaffTables token={screen.token} onUnauthorized={handleUnauthorized} />
+          <StaffTables
+            token={screen.token}
+            onUnauthorized={handleUnauthorized}
+            refreshSignal={refreshSignal}
+            onActionComplete={bumpRefresh}
+          />
         )}
       </div>
     )

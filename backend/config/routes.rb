@@ -19,15 +19,17 @@ Rails.application.routes.draw do
     end
   end
 
-  # Staff login + seat-by-code + queue/table views — routes already defined
-  # in documents/05-specifications/api-spec.md. POST /staff/seat, GET
-  # /staff/queue, and GET /staff/tables all require the staff session token
-  # the login endpoint issues (Staff::BaseController).
+  # Staff login + seat-by-code + queue/table views + release/no-show — routes
+  # already defined in documents/05-specifications/api-spec.md. Every route
+  # below login requires the staff session token the login endpoint issues
+  # (Staff::BaseController).
   namespace :staff do
     post "login" => "login#create"
     post "seat" => "seat#create"
     get "queue" => "queue#index"
     get "tables" => "table#index"
+    post "seating-assignments/release" => "release#create"
+    post "queue/no-show" => "no_show#create"
   end
 
   # Defines the root path route ("/")
